@@ -117,6 +117,10 @@ async def get_media_group_messages(initial_message, message_id: str, peer) -> li
     media_group = [initial_message]
     grouped_id = initial_message.grouped_id
 
+    if not grouped_id:
+        # 如果初始消息没有 grouped_id，则返回初始消息本身
+        return media_group
+
     # 获取前面的消息
     previous_message_id = int(message_id) - 1
     while True:
