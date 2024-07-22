@@ -30,7 +30,7 @@ AUTHS=719195224 12345678
 To deploy this bot, run:
 
 ```shell
-git clone https://github.com/xditya/GetRestrictedMessages
+git clone https://github.com/spb512/GetRestrictedMessages
 cd GetRestrictedMessages
 pip3 install -r requirements.txt
 cp .env.sample .env
