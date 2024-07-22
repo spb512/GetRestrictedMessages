@@ -32,7 +32,7 @@ To deploy this bot, run:
 ```shell
 git clone https://github.com/xditya/GetRestrictedMessages
 cd GetRestrictedMessages
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 cp .env.sample .env
 nano .env [ fill the values and exit with ctrl+s and then ctrl+x ]
 python main.py
