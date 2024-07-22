@@ -1,77 +1,67 @@
-# BoilerPlate Generated using https://github.com/xditya/TelethonSnippets Extension.
-# Dependencies to be pre-installed:
-# - telethon: Telegram Library.
-# - python-decouple: To load config vars from .env files or environment variables.
-
-# GetRestrictedMessagesBot - Telegram Bot to copy messages from chats with forward restrictions.
-# Author: @xditya
-# WebSite: https://xditya.me
-
 import logging
 import os
-
 from decouple import config
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-# initializing logger
+# 初始化日志记录器
 logging.basicConfig(
     level=logging.INFO, format="[%(levelname)s] %(asctime)s - %(message)s"
 )
 log = logging.getLogger("TelethonSnippets")
 
-# fetching variales from env
-try:
-    API_ID = config("API_ID", cast=int)
-    API_HASH = config("API_HASH")
-    SESSION = config("SESSION")
-    AUTHS = config("AUTHS")
-except BaseException as ex:
-    log.info(ex)
+# 从环境变量中获取配置
+API_ID = config("API_ID", cast=int, default=None)
+API_HASH = config("API_HASH", default=None)
+SESSION = config("SESSION", default=None)
+AUTHS = config("AUTHS", default=None)
 
-AUTH_USERS = [int(x) for x in AUTHS.split(" ")]
+if not API_ID or not API_HASH or not SESSION or not AUTHS:
+    log.error("Missing one or more environment variables: API_ID, API_HASH, SESSION, AUTHS")
+    exit(1)
+
+# 将授权用户列表转换为整数列表
+AUTH_USERS = [int(x) for x in AUTHS.split()]
 
 log.info("Connecting bot.")
 try:
+    # 使用会话字符串初始化Telegram客户端
     client = TelegramClient(
         StringSession(SESSION), api_id=API_ID, api_hash=API_HASH
     ).start()
-except BaseException as e:
-    log.warning(e)
+except Exception as e:
+    log.exception("Failed to start client")
     exit(1)
 
-
-# functions
+# 定义处理新消息的函数
 @client.on(events.NewMessage(from_users=AUTH_USERS, func=lambda e: e.is_private))
-async def on_new_link(event):
+async def on_new_link(event: events.NewMessage.Event) -> None:
     text = event.text
     if not text:
         return
 
-    # idk regex, lets do it the old way
+    # 检查消息是否包含有效的Telegram链接
     if not (text.startswith("https://t.me") or text.startswith("http://t.me")):
         return
 
+    # 检查是否包含 '?single' 参数
+    is_single = '?single' in text
+
+    # 去除链接中的 '?single' 参数
+    text = text.split('?')[0]
+
     try:
-        """
-        if "/c/" in text:
-            chat_id = text.split("/c/")[1].split("/")[0]
-            message_id = text.split("/c/")[1].split("/")[1]
-        else:
-            chat_id = text.split("/")[3]
-            message_id = text.split("/")[4]
-        """
+        # 解析链接以提取 chat_id 和 message_id
         parts = text.lstrip('https://').lstrip('http://').split('/')
-        
         chat_id = parts[2 if parts[1] in ['c', 's'] else 1]
-        
         message_id = parts[-1]
     except IndexError:
-        return await event.reply("Invalid link?")
+        await event.reply("Invalid link?")
+        return
 
     if not message_id.isdigit():
-        # message ids are always a number
-        return await event.reply("Invalid link?")
+        await event.reply("Invalid link?")
+        return
 
     if chat_id.isdigit():
         peer = int(chat_id)
@@ -81,37 +71,81 @@ async def on_new_link(event):
         peer = chat_id
 
     try:
+        # 获取指定聊天中的消息
         message = await client.get_messages(peer, ids=int(message_id))
     except ValueError:
-        return await event.reply(
-            "I cant find the chat! Either it is invalid, or join it first from this account!"
-        )
-    except BaseException as e:
-        return await event.reply(f"Error: {e}")
+        await event.reply("I can't find the chat! Either it is invalid, or join it first from this account!")
+        return
+    except Exception as e:
+        log.exception("Failed to get messages")
+        await event.reply(f"Error: {e}")
+        return
 
     if not message:
-        return await event.reply("Message not found.")
+        await event.reply("Message not found.")
+        return
 
-    if message.media:
-        reply_prog = await event.reply("Please wait, downloading media...")
-        file = await message.download_media()
-        await reply_prog.delete()
+    # 如果链接包含 '?single' 参数，则只处理当前消息
+    if is_single:
+        await handle_single_message(event, message)
     else:
-        file = None
+        await handle_media_group(event, message, message_id, peer)
 
+async def handle_single_message(event: events.NewMessage.Event, message) -> None:
     try:
-        await client.send_message(event.chat_id, message.text, file=file)
-    except ValueError:
-        return await event.reply("Message has no text or media.")
-    except BaseException as e:
-        return await event.reply(f"Error: {e}")
+        if message.media:
+            await client.send_file(event.chat_id, message.media, caption=message.text or "")
+        else:
+            await client.send_message(event.chat_id, message.text or "No media found.")
+    except Exception as e:
+        log.exception("Failed to handle single message")
+        await event.reply(f"Error: {e}")
 
+async def handle_media_group(event: events.NewMessage.Event, message, message_id: str, peer) -> None:
     try:
-        os.remove(file)
-    except BaseException:
-        pass
+        media_group = await get_media_group_messages(message, message_id, peer)
+        media_files = [msg.media for msg in media_group if msg.media]
+        combined_caption = "\n".join([msg.text for msg in media_group if msg.text])
 
+        if media_files:
+            await client.send_file(event.chat_id, media_files, caption=combined_caption)
+    except Exception as e:
+        log.exception("Failed to handle media group")
+        await event.reply(f"Error: {e}")
 
+async def get_media_group_messages(initial_message, message_id: str, peer) -> list:
+    media_group = [initial_message]
+    grouped_id = initial_message.grouped_id
+
+    # 获取前面的消息
+    previous_message_id = int(message_id) - 1
+    while True:
+        try:
+            prev_message = await client.get_messages(peer, ids=previous_message_id)
+            if prev_message.grouped_id == grouped_id:
+                media_group.insert(0, prev_message)
+                previous_message_id -= 1
+            else:
+                break
+        except Exception:
+            break
+
+    # 获取后面的消息
+    next_message_id = int(message_id) + 1
+    while True:
+        try:
+            next_message = await client.get_messages(peer, ids=next_message_id)
+            if next_message.grouped_id == grouped_id:
+                media_group.append(next_message)
+                next_message_id += 1
+            else:
+                break
+        except Exception:
+            break
+
+    return media_group
+
+# 获取机器人的用户信息并开始运行客户端
 ubot_self = client.loop.run_until_complete(client.get_me())
 log.info(
     "\nClient has started as %d.\n\nJoin @BotzHub [ https://t.me/BotzHub ] for more cool bots :)",
