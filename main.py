@@ -15,6 +15,7 @@ API_ID = config("API_ID", cast=int, default=None)
 API_HASH = config("API_HASH", default=None)
 SESSION = config("SESSION", default=None)
 AUTHS = config("AUTHS", default=None)
+ENABLE_AUTH_LISTEN = config("ENABLE_AUTH_LISTEN", cast=bool, default=True)
 
 if not API_ID or not API_HASH or not SESSION or not AUTHS:
     log.error("Missing one or more environment variables: API_ID, API_HASH, SESSION, AUTHS")
@@ -34,7 +35,6 @@ except Exception as e:
     exit(1)
 
 # 定义处理新消息的函数
-@client.on(events.NewMessage(from_users=AUTH_USERS, func=lambda e: e.is_private))
 async def on_new_link(event: events.NewMessage.Event) -> None:
     text = event.text
     if not text:
@@ -148,6 +148,12 @@ async def get_media_group_messages(initial_message, message_id: str, peer) -> li
             break
 
     return media_group
+
+# 根据 ENABLE_AUTH_LISTEN 设置监听器
+if ENABLE_AUTH_LISTEN:
+    client.add_event_handler(on_new_link, events.NewMessage(from_users=AUTH_USERS, func=lambda e: e.is_private))
+else:
+    client.add_event_handler(on_new_link, events.NewMessage(func=lambda e: e.is_private))
 
 # 获取机器人的用户信息并开始运行客户端
 ubot_self = client.loop.run_until_complete(client.get_me())
