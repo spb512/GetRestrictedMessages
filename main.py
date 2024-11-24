@@ -11,18 +11,15 @@ logging.basicConfig(
 log = logging.getLogger("TelethonSnippets")
 
 # 从环境变量中获取配置
-API_ID = config("API_ID", cast=int, default=None)
-API_HASH = config("API_HASH", default=None)
-SESSION = config("SESSION", default=None)
-AUTHS = config("AUTHS", default=None)
-ENABLE_AUTH_LISTEN = config("ENABLE_AUTH_LISTEN", cast=bool, default=True)
+API_ID = config("API_ID", cast=int)
+API_HASH = config("API_HASH")
+SESSION = config("SESSION")
+ENABLE_AUTHS = config("ENABLE_AUTHS", cast=bool, default=False)
+AUTHS = config("AUTHS")
 
-if not API_ID or not API_HASH or not SESSION or not AUTHS:
-    log.error("Missing one or more environment variables: API_ID, API_HASH, SESSION, AUTHS")
+if not API_ID or not API_HASH or not SESSION:
+    log.error("Missing one or more environment variables: API_ID, API_HASH, SESSION")
     exit(1)
-
-# 将授权用户列表转换为整数列表
-AUTH_USERS = [int(x) for x in AUTHS.split()]
 
 log.info("Connecting bot.")
 try:
@@ -149,8 +146,10 @@ async def get_media_group_messages(initial_message, message_id: str, peer) -> li
 
     return media_group
 
-# 根据 ENABLE_AUTH_LISTEN 设置监听器
-if ENABLE_AUTH_LISTEN:
+# 根据 ENABLE_AUTHS 设置监听器
+if ENABLE_AUTHS:
+    # 将授权用户列表转换为整数列表
+    AUTH_USERS = [int(x) for x in AUTHS.split()]
     client.add_event_handler(on_new_link, events.NewMessage(from_users=AUTH_USERS, func=lambda e: e.is_private))
 else:
     client.add_event_handler(on_new_link, events.NewMessage(func=lambda e: e.is_private))
