@@ -14,7 +14,6 @@ log = logging.getLogger("TelethonSnippets")
 API_ID = config("API_ID", cast=int)
 API_HASH = config("API_HASH")
 SESSION = config("SESSION")
-ENABLE_AUTHS = config("ENABLE_AUTHS", cast=bool, default=False)
 AUTHS = config("AUTHS")
 
 if not API_ID or not API_HASH or not SESSION:
@@ -146,13 +145,13 @@ async def get_media_group_messages(initial_message, message_id: str, peer) -> li
 
     return media_group
 
-# 根据 ENABLE_AUTHS 设置监听器
-if ENABLE_AUTHS:
-    # 将授权用户列表转换为整数列表
+# 根据 AUTHS 设置监听器
+if not AUTHS:
+    client.add_event_handler(on_new_link, events.NewMessage(func=lambda e: e.is_private))
+else:
+     # 将授权用户列表转换为整数列表
     AUTH_USERS = [int(x) for x in AUTHS.split()]
     client.add_event_handler(on_new_link, events.NewMessage(from_users=AUTH_USERS, func=lambda e: e.is_private))
-else:
-    client.add_event_handler(on_new_link, events.NewMessage(func=lambda e: e.is_private))
 
 # 获取机器人的用户信息并开始运行客户端
 ubot_self = client.loop.run_until_complete(client.get_me())
