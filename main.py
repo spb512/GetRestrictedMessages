@@ -94,9 +94,10 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
 async def handle_single_message(event: events.NewMessage.Event, message) -> None:
     try:
         if message.media:
-            await client.send_file(event.chat_id, message.media, caption=message.text or "")
+            await client.send_file(event.chat_id, message.media, caption=message.text or "", reply_to=event.message.id)
         else:
-            await client.send_message(event.chat_id, message.text or "未找到媒体。")
+            await client.send_message(event.chat_id, message.text or "singel未找到媒体(消息)。",
+                                      reply_to=event.message.id)
     except Exception as e:
         log.exception("无法处理单条消息")
         await event.reply(f"Error: {e}")
@@ -109,7 +110,10 @@ async def handle_media_group(event: events.NewMessage.Event, message, message_id
         combined_caption = "\n".join([msg.text for msg in media_group if msg.text])
 
         if media_files:
-            await client.send_file(event.chat_id, media_files, caption=combined_caption)
+            await client.send_file(event.chat_id, media_files, caption=combined_caption, reply_to=event.message.id)
+        else:
+            await client.send_message(event.chat_id, message.text or "消息组未找到媒体(消息)。",
+                                      reply_to=event.message.id)
     except Exception as e:
         log.exception("无法处理媒体组")
         await event.reply(f"Error: {e}")
