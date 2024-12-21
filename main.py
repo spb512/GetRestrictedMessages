@@ -1,5 +1,5 @@
 import logging
-import os
+
 from decouple import config
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -15,12 +15,14 @@ API_ID = config("API_ID", cast=int)
 API_HASH = config("API_HASH")
 SESSION = config("SESSION")
 AUTHS = config("AUTHS")
+# 消息范围±10
+RANGE = 10
 
 if not API_ID or not API_HASH or not SESSION:
-    log.error("Missing one or more environment variables: API_ID, API_HASH, SESSION")
+    log.error("缺少一个或多个环境变量:API_ID、API_HASH、SESSION")
     exit(1)
 
-log.info("Connecting bot.")
+log.info("连接机器人。")
 try:
     # 使用会话字符串初始化Telegram客户端
     client = TelegramClient(
@@ -29,6 +31,7 @@ try:
 except Exception as e:
     log.exception("Failed to start client")
     exit(1)
+
 
 # 定义处理新消息的函数
 async def on_new_link(event: events.NewMessage.Event) -> None:
@@ -52,11 +55,11 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         chat_id = parts[2 if parts[1] in ['c', 's'] else 1]
         message_id = parts[-1]
     except IndexError:
-        await event.reply("Invalid link?")
+        await event.reply("无效链接")
         return
 
     if not message_id.isdigit():
-        await event.reply("Invalid link?")
+        await event.reply("无效链接")
         return
 
     if chat_id.isdigit():
@@ -70,15 +73,15 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         # 获取指定聊天中的消息
         message = await client.get_messages(peer, ids=int(message_id))
     except ValueError:
-        await event.reply("I can't find the chat! Either it is invalid, or join it first from this account!")
+        await event.reply("我找不到聊天记录！要么无效，要么先以此帐户加入！")
         return
     except Exception as e:
-        log.exception("Failed to get messages")
+        log.exception("无法获取消息")
         await event.reply(f"Error: {e}")
         return
 
     if not message:
-        await event.reply("Message not found.")
+        await event.reply("找不到消息")
         return
 
     # 如果链接包含 '?single' 参数，则只处理当前消息
@@ -87,15 +90,17 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     else:
         await handle_media_group(event, message, message_id, peer)
 
+
 async def handle_single_message(event: events.NewMessage.Event, message) -> None:
     try:
         if message.media:
             await client.send_file(event.chat_id, message.media, caption=message.text or "")
         else:
-            await client.send_message(event.chat_id, message.text or "No media found.")
+            await client.send_message(event.chat_id, message.text or "未找到媒体。")
     except Exception as e:
-        log.exception("Failed to handle single message")
+        log.exception("无法处理单条消息")
         await event.reply(f"Error: {e}")
+
 
 async def handle_media_group(event: events.NewMessage.Event, message, message_id: str, peer) -> None:
     try:
@@ -106,8 +111,9 @@ async def handle_media_group(event: events.NewMessage.Event, message, message_id
         if media_files:
             await client.send_file(event.chat_id, media_files, caption=combined_caption)
     except Exception as e:
-        log.exception("Failed to handle media group")
+        log.exception("无法处理媒体组")
         await event.reply(f"Error: {e}")
+
 
 async def get_media_group_messages(initial_message, message_id: str, peer) -> list:
     media_group = [initial_message]
@@ -117,46 +123,33 @@ async def get_media_group_messages(initial_message, message_id: str, peer) -> li
         # 如果初始消息没有 grouped_id，则返回初始消息本身
         return media_group
 
-    # 获取前面的消息
-    previous_message_id = int(message_id) - 1
-    while True:
-        try:
-            prev_message = await client.get_messages(peer, ids=previous_message_id)
-            if prev_message.grouped_id == grouped_id:
-                media_group.insert(0, prev_message)
-                previous_message_id -= 1
-            else:
-                break
-        except Exception:
-            break
+    # 获取前后10条消息的范围
+    start_id = max(0, int(message_id) - RANGE)
+    end_id = int(message_id) + RANGE
 
-    # 获取后面的消息
-    next_message_id = int(message_id) + 1
-    while True:
-        try:
-            next_message = await client.get_messages(peer, ids=next_message_id)
-            if next_message.grouped_id == grouped_id:
-                media_group.append(next_message)
-                next_message_id += 1
-            else:
-                break
-        except Exception:
-            break
+    try:
+        # 转换 range 为列表
+        ids = list(range(start_id, end_id + 1))
+        # 一次性获取指定范围内的消息
+        messages = await client.get_messages(peer, ids=ids)
+
+        # 按照 grouped_id 筛选属于同一组的消息
+        media_group = [msg for msg in messages if msg and msg.grouped_id == grouped_id]
+    except Exception as e:
+        log.exception("无法获取范围内的消息")
 
     return media_group
+
 
 # 根据 AUTHS 设置监听器
 if not AUTHS:
     client.add_event_handler(on_new_link, events.NewMessage(func=lambda e: e.is_private))
 else:
-     # 将授权用户列表转换为整数列表
+    # 将授权用户列表转换为整数列表
     AUTH_USERS = [int(x) for x in AUTHS.split()]
     client.add_event_handler(on_new_link, events.NewMessage(from_users=AUTH_USERS, func=lambda e: e.is_private))
 
 # 获取机器人的用户信息并开始运行客户端
 ubot_self = client.loop.run_until_complete(client.get_me())
-log.info(
-    "\nClient has started as %d.\n\nJoin @BotzHub [ https://t.me/BotzHub ] for more cool bots :)",
-    ubot_self.id,
-)
+log.info("客户端已启动为 %d。", ubot_self.id)
 client.run_until_disconnected()
