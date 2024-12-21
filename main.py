@@ -11,15 +11,15 @@ logging.basicConfig(
 log = logging.getLogger("TelethonSnippets")
 
 # 从环境变量中获取配置
-API_ID = config("API_ID", cast=int)
-API_HASH = config("API_HASH")
-SESSION = config("SESSION")
-AUTHS = config("AUTHS")
+API_ID = config("API_ID", default=None, cast=int)
+API_HASH = config("API_HASH", default=None)
+SESSION = config("SESSION", default=None)
+AUTHS = config("AUTHS", default="")
 # 消息范围±10
 RANGE = 10
 
-if not API_ID or not API_HASH or not SESSION:
-    log.error("缺少一个或多个环境变量:API_ID、API_HASH、SESSION")
+if not all([API_ID, API_HASH, SESSION]):
+    log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、SESSION")
     exit(1)
 
 log.info("连接机器人。")
@@ -29,7 +29,8 @@ try:
         StringSession(SESSION), api_id=API_ID, api_hash=API_HASH
     ).start()
 except Exception as e:
-    log.exception("Failed to start client")
+    log.exception("启动客户端失败")
+    log.exception(f"Error: {e}")
     exit(1)
 
 
@@ -76,8 +77,8 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         await event.reply("我找不到聊天记录！要么无效，要么先以此帐户加入！")
         return
     except Exception as e:
-        log.exception("无法获取消息")
-        await event.reply(f"Error: {e}")
+        log.exception(f"Error: {e}")
+        await event.reply("服务器内部错误，请过段时间重试")
         return
 
     if not message:
@@ -94,29 +95,27 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
 async def handle_single_message(event: events.NewMessage.Event, message) -> None:
     try:
         if message.media:
-            await client.send_file(event.chat_id, message.media, caption=message.text or "", reply_to=event.message.id)
+            await client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
         else:
-            await client.send_message(event.chat_id, message.text or "singel未找到媒体(消息)。",
-                                      reply_to=event.message.id)
+            await client.send_message(event.chat_id, message.text, reply_to=event.message.id)
     except Exception as e:
-        log.exception("无法处理单条消息")
-        await event.reply(f"Error: {e}")
+        log.exception(f"Error: {e}")
+        await event.reply("服务器内部错误，请过段时间重试")
 
 
 async def handle_media_group(event: events.NewMessage.Event, message, message_id: str, peer) -> None:
     try:
         media_group = await get_media_group_messages(message, message_id, peer)
         media_files = [msg.media for msg in media_group if msg.media]
-        combined_caption = "\n".join([msg.text for msg in media_group if msg.text])
 
         if media_files:
-            await client.send_file(event.chat_id, media_files, caption=combined_caption, reply_to=event.message.id)
+            caption = media_group[0].text
+            await client.send_file(event.chat_id, media_files, caption=caption, reply_to=event.message.id)
         else:
-            await client.send_message(event.chat_id, message.text or "消息组未找到媒体(消息)。",
-                                      reply_to=event.message.id)
+            await client.send_message(event.chat_id, message.text, reply_to=event.message.id)
     except Exception as e:
-        log.exception("无法处理媒体组")
-        await event.reply(f"Error: {e}")
+        log.exception(f"Error: {e}")
+        await event.reply("服务器内部错误，请过段时间重试")
 
 
 async def get_media_group_messages(initial_message, message_id: str, peer) -> list:
@@ -128,7 +127,7 @@ async def get_media_group_messages(initial_message, message_id: str, peer) -> li
         return media_group
 
     # 获取前后10条消息的范围
-    start_id = max(0, int(message_id) - RANGE)
+    start_id = max(1, int(message_id) - RANGE)
     end_id = int(message_id) + RANGE
 
     try:
@@ -140,18 +139,44 @@ async def get_media_group_messages(initial_message, message_id: str, peer) -> li
         # 按照 grouped_id 筛选属于同一组的消息
         media_group = [msg for msg in messages if msg and msg.grouped_id == grouped_id]
     except Exception as e:
-        log.exception("无法获取范围内的消息")
+        log.exception(f"Error: {e}")
 
     return media_group
 
 
-# 根据 AUTHS 设置监听器
-if not AUTHS:
-    client.add_event_handler(on_new_link, events.NewMessage(func=lambda e: e.is_private))
-else:
-    # 将授权用户列表转换为整数列表
-    AUTH_USERS = [int(x) for x in AUTHS.split()]
-    client.add_event_handler(on_new_link, events.NewMessage(from_users=AUTH_USERS, func=lambda e: e.is_private))
+# 在配置加载时解析授权用户列表
+AUTH_USERS = set()
+if AUTHS:
+    try:
+        # 解析授权用户字符串，支持整数和 @username
+        AUTH_USERS = set(int(x) if x.isdigit() else x for x in AUTHS.split())
+    except ValueError:
+        log.error("AUTHS 配置中包含无效的用户格式，确保是 user_id 或 @username")
+        exit(1)
+
+
+# 添加事件处理器
+def is_authorized(event: events.NewMessage.Event) -> bool:
+    # 如果未设置 AUTH_USERS，则默认允许所有私聊
+    if not AUTH_USERS:
+        return event.is_private
+    # 如果设置了 AUTH_USERS，则校验是否在授权列表中
+    sender_id = event.sender_id
+    sender = event.sender
+
+    # 获取用户名（可能为 None）
+    sender_name = sender.username if sender else None
+
+    # 调试日志
+    # log.info(f"收到来自用户 {sender_id} 的消息，用户名：{sender_name}")
+    # log.info(f"是否在授权用户列表 (ID)：{sender_id in AUTH_USERS}")
+    # log.info(f"是否在授权用户列表 (用户名)：{sender_name in AUTH_USERS if sender_name else False}")
+
+    # 校验 ID 或用户名是否在授权列表中
+    return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private
+
+
+client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
 
 # 获取机器人的用户信息并开始运行客户端
 ubot_self = client.loop.run_until_complete(client.get_me())
