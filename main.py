@@ -178,7 +178,11 @@ def is_authorized(event: events.NewMessage.Event) -> bool:
 
 client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
 
-# 获取机器人的用户信息并开始运行客户端
-ubot_self = client.loop.run_until_complete(client.get_me())
-log.info("客户端已启动为 %d。", ubot_self.id)
-client.run_until_disconnected()
+async def main():
+    # 获取机器人的用户信息并开始运行客户端
+    ubot_self = await client.get_me()
+    log.info("客户端已启动为 %d。", ubot_self.id)
+    await client.run_until_disconnected()
+
+client.loop.run_until_complete(main())
+
