@@ -74,7 +74,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         # 获取指定聊天中的消息
         message = await client.get_messages(peer, ids=int(message_id))
     except ValueError:
-        await event.reply("我找不到聊天记录！要么无效，要么先以此帐户加入！")
+        await event.reply("找不到聊天记录！要么无效，要么先以此帐户加入！")
         return
     except Exception as e:
         log.exception(f"Error: {e}")
@@ -151,7 +151,7 @@ if AUTHS:
         # 解析授权用户字符串，支持整数和 @username
         AUTH_USERS = set(int(x) if x.isdigit() else x for x in AUTHS.split())
     except ValueError:
-        log.error("AUTHS 配置中包含无效的用户格式，确保是 user_id 或 @username")
+        log.error("AUTHS 配置中包含无效的用户格式，确保是 user_id 或 username")
         exit(1)
 
 
