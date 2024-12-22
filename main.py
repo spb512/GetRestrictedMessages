@@ -73,16 +73,13 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     try:
         # 获取指定聊天中的消息
         message = await client.get_messages(peer, ids=int(message_id))
-    except ValueError:
-        await event.reply("找不到聊天记录！要么无效，要么先以此帐户加入！")
-        return
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
         return
 
     if not message:
-        await event.reply("找不到消息")
+        await event.reply("找不到聊天记录！要么无效，要么先以此帐户加入！")
         return
 
     # 如果链接包含 '?single' 参数，则只处理当前消息
