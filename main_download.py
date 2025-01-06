@@ -106,13 +106,14 @@ async def handle_single_message(event: events.NewMessage.Event, message) -> None
             force_document = False
             if isinstance(message.media, MessageMediaDocument) and (
                     message.media.document.mime_type == 'image/jpeg' or (
-                    message.media.document.mime_type == 'video/mp4' and not message.media.video)):
+                    message.media.document.mime_type == 'video/mp4' and not message.media.video) or message.media.document.mime_type == 'image/heic'):
                 force_document = True
 
             # 先下载文件
             file_path = await message.download_media()
             if isinstance(message.media, MessageMediaDocument) and (
-                    message.media.document.mime_type == 'video/mp4' and message.media.document.size > 10 * 1024 * 1024):
+                    (
+                            message.media.document.mime_type == 'video/mp4' and message.media.document.size > 10 * 1024 * 1024) or message.media.document.mime_type == 'image/heic'):
                 # 下载缩略图
                 timestamp = int(time.time())
                 thumb_filename = f"{message.media.document.id}_{timestamp}_thumbnail.jpg"
@@ -177,7 +178,8 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
             return InputMediaUploadedPhoto(file=await client.upload_file(file_path))
 
         elif isinstance(msg.media, MessageMediaDocument):
-            if msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024:
+            if (msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024) or (
+                    msg.media.document.mime_type == "image/heic"):
                 thumb_path = await client.download_media(
                     msg.media, file=f"{temp_file.name}_thumb.jpg", thumb=-1
                 )
