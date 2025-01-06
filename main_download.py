@@ -146,7 +146,7 @@ async def handle_media_group(event: events.NewMessage.Event, message, message_id
         media_group = await get_media_group_messages(message, message_id, peer)
 
         # 收集所有文本作为 caption
-        captions = [msg.text if msg.text is not None else "" for msg in media_group]
+        captions = [msg.text if msg.text is not None else '' for msg in media_group]
         combined_caption = "\n\n".join(captions) if captions else None
 
         # 构造相册的文件对象
