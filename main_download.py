@@ -125,6 +125,10 @@ async def handle_single_message(event: events.NewMessage.Event, message) -> None
                                        attributes=message.media.document.attributes, thumb=thumb_path,
                                        force_document=force_document)
                 os.remove(thumb_path)  # 发送后删除缩略图
+            elif isinstance(message.media, MessageMediaDocument) and message.media.document.mime_type == 'audio/mpeg':
+                await client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
+                                       attributes=message.media.document.attributes,
+                                       force_document=force_document)
             else:
                 await client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
                                        force_document=force_document)
