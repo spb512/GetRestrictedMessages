@@ -13,7 +13,7 @@ log = logging.getLogger("TelethonSnippets")
 # 从环境变量中获取配置
 API_ID = config("API_ID", default=None, cast=int)
 API_HASH = config("API_HASH", default=None)
-SESSION = config("SESSION", default=None)
+SESSION = config("BOT_SESSION", default=None)
 AUTHS = config("AUTHS", default="")
 # 消息范围±10
 RANGE = 10

@@ -1,13 +1,14 @@
+import asyncio
 import logging
 import os
+import tempfile
 import time
 
 from decouple import config
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.tl.types import InputMediaUploadedDocument, InputMediaUploadedPhoto, DocumentAttributeFilename, \
-    MessageMediaPhoto
-from telethon.tl.types import MessageMediaDocument
+from telethon.tl.types import MessageMediaDocument, InputMediaUploadedDocument, InputMediaUploadedPhoto, \
+    MessageMediaPhoto, Message
 
 # 初始化日志记录器
 logging.basicConfig(
@@ -18,7 +19,7 @@ log = logging.getLogger("TelethonSnippets")
 # 从环境变量中获取配置
 API_ID = config("API_ID", default=None, cast=int)
 API_HASH = config("API_HASH", default=None)
-SESSION = config("SESSION", default=None)
+SESSION = config("USER_SESSION", default=None)
 AUTHS = config("AUTHS", default="")
 # 消息范围±10
 RANGE = 10
@@ -147,69 +148,41 @@ async def handle_media_group(event: events.NewMessage.Event, message, message_id
 
         # 收集所有文本作为 caption
         captions = [msg.text if msg.text is not None else '' for msg in media_group]
-        combined_caption = "\n\n".join(captions) if captions else None
 
         # 构造相册的文件对象
-        album_files = []
-        for msg in media_group:
-            if msg.media:
-                # 下载文件
-                file_path = await msg.download_media()
-                thumb_path = None
-
-                # 判断是否是照片
-                if isinstance(msg.media, MessageMediaPhoto):
-                    # 构造 InputMediaUploadedPhoto
-                    album_files.append(
-                        InputMediaUploadedPhoto(
-                            file=await client.upload_file(file_path),
-                        )
-                    )
-                elif isinstance(msg.media, MessageMediaDocument):
-                    # 判断是否需要缩略图
-                    if msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024:
-                        timestamp = int(time.time())
-                        thumb_filename = f"{msg.media.document.id}_{timestamp}_thumbnail.jpg"
-                        thumb_path = await client.download_media(
-                            msg.media,
-                            file=thumb_filename,
-                            thumb=-1  # 下载最高质量缩略图
-                        )
-
-                    # 构造 InputMediaUploadedDocument
-                    album_files.append(
-                        InputMediaUploadedDocument(
-                            file=await client.upload_file(file_path),
-                            thumb=await client.upload_file(thumb_path) if thumb_path else None,
-                            mime_type=msg.media.document.mime_type or "application/octet-stream",  # 默认 MIME 类型
-                            attributes=msg.media.document.attributes or [
-                                DocumentAttributeFilename(file_name=file_path)
-                            ],
-                        )
-                    )
-
-                # 删除本地文件
-                os.remove(file_path)
-                if thumb_path:
-                    os.remove(thumb_path)
-            else:
-                # 如果消息不包含媒体，发送文本消息
-                await client.send_message(event.chat_id, msg.text, reply_to=event.message.id)
-
-        # 发送相册
+        album_files = await asyncio.gather(*[prepare_album_file(msg, client) for msg in media_group if msg.media])
         if album_files:
-            await client.send_file(
-                event.chat_id,
-                file=album_files,
-                caption=captions,
-                reply_to=event.message.id,
-            )
-
+            await client.send_file(event.chat_id, file=album_files, caption=captions, reply_to=event.message.id)
+        else:
+            # 如果消息不包含媒体，发送文本消息
+            await client.send_message(event.chat_id, message.text, reply_to=event.message.id)
         # 删除提示消息
         await status_message.delete()
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
+
+
+async def prepare_album_file(msg: Message, client: TelegramClient):
+    """准备相册文件的上传对象"""
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+        file_path = await msg.download_media(file=temp_file.name)
+        thumb_path = None
+
+        if isinstance(msg.media, MessageMediaPhoto):
+            return InputMediaUploadedPhoto(file=await client.upload_file(file_path))
+
+        elif isinstance(msg.media, MessageMediaDocument):
+            if msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024:
+                thumb_path = await client.download_media(
+                    msg.media, file=f"{temp_file.name}_thumb.jpg", thumb=-1
+                )
+            return InputMediaUploadedDocument(
+                file=await client.upload_file(file_path),
+                thumb=await client.upload_file(thumb_path) if thumb_path else None,
+                mime_type=msg.media.document.mime_type or "application/octet-stream",
+                attributes=msg.media.document.attributes,
+            )
 
 
 async def get_media_group_messages(initial_message, message_id: str, peer) -> list:
