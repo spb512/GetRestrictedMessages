@@ -42,6 +42,7 @@ except Exception as e:
 
 # 定义处理新消息的函数
 async def on_new_link(event: events.NewMessage.Event) -> None:
+    global comment_id
     text = event.text
     if not text:
         return
@@ -53,7 +54,12 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     # 检查是否包含 '?single' 参数
     is_single = '?single' in text
 
-    # 去除链接中的 '?single' 参数
+    # 检查是否包含 '?comment' 参数
+    is_comment = '?comment' in text
+
+    if is_comment:
+        comment_id = int(text.split('?comment=')[1])
+    # 去除链接中的 '?single' 或 '?comment' 参数
     text = text.split('?')[0]
 
     try:
@@ -68,6 +74,8 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     if not message_id.isdigit():
         await event.reply("无效链接")
         return
+    else:
+        message_id = int(message_id)
 
     if chat_id.isdigit():
         peer = int(chat_id)
@@ -78,7 +86,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
 
     try:
         # 获取指定聊天中的消息
-        message = await client.get_messages(peer, ids=int(message_id))
+        message = await client.get_messages(peer, ids=message_id)
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
@@ -93,8 +101,43 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     # 如果链接包含 '?single' 参数，则只处理当前消息
     if is_single:
         await handle_single_message(event, message)
+    elif is_comment:
+        # 获取频道实体
+        channel = await client.get_entity(chat_id)
+        comment_message, comment_grouped_id = await get_comment_message(
+            client, channel, message_id, comment_id
+        )
+
+        if not comment_message:
+            await event.reply("未找到指定的评论消息")
+        else:
+            if not comment_grouped_id:
+                await handle_single_message(event, comment_message)
+            else:
+                # 获取属于同一组的所有消息
+                comment_media_group = []
+                async for reply in client.iter_messages(
+                        entity=channel,
+                        reply_to=message_id
+                ):
+                    if reply.grouped_id == comment_grouped_id:
+                        comment_media_group.append(reply)
+                await handle_media_group(event, comment_message, comment_media_group)
     else:
-        await handle_media_group(event, message, message_id, peer)
+        # 获取属于同一组的消息
+        media_group = await get_media_group_messages(message, message_id, peer)
+        await handle_media_group(event, message, media_group)
+
+
+async def get_comment_message(client: TelegramClient, channel, message_id, comment_id):
+    """从评论中获取指定的评论消息及其 grouped_id"""
+    async for reply in client.iter_messages(
+            entity=channel,
+            reply_to=message_id
+    ):
+        if reply.id == comment_id:
+            return reply, reply.grouped_id  # 返回匹配的评论消息及其 grouped_id
+    return None, None  # 如果没有找到，返回 None
 
 
 async def handle_single_message(event: events.NewMessage.Event, message) -> None:
@@ -143,13 +186,10 @@ async def handle_single_message(event: events.NewMessage.Event, message) -> None
         await event.reply("服务器内部错误，请过段时间重试")
 
 
-async def handle_media_group(event: events.NewMessage.Event, message, message_id: str, peer) -> None:
+async def handle_media_group(event: events.NewMessage.Event, message, media_group) -> None:
     try:
         # 发送提示消息
         status_message = await event.reply("转存中，请稍等...")
-
-        # 获取属于同一组的消息
-        media_group = await get_media_group_messages(message, message_id, peer)
 
         # 收集所有文本作为 caption
         captions = [msg.text if msg.text is not None else '' for msg in media_group]
@@ -171,7 +211,8 @@ async def handle_media_group(event: events.NewMessage.Event, message, message_id
 async def prepare_album_file(msg: Message, client: TelegramClient):
     """准备相册文件的上传对象"""
     # 为临时文件添加扩展名
-    suffix = ".jpg" if isinstance(msg.media, MessageMediaPhoto) else ".mp4" if "video/mp4" in msg.media.document.mime_type else ""
+    suffix = ".jpg" if isinstance(msg.media,
+                                  MessageMediaPhoto) else ".mp4" if "video/mp4" in msg.media.document.mime_type else ""
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
         file_path = await msg.download_media(file=temp_file.name)
         thumb_path = None
@@ -199,7 +240,8 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
             if thumb_path:
                 os.remove(thumb_path)
 
-async def get_media_group_messages(initial_message, message_id: str, peer) -> list:
+
+async def get_media_group_messages(initial_message, message_id, peer) -> list:
     media_group = [initial_message]
     grouped_id = initial_message.grouped_id
 
@@ -208,8 +250,8 @@ async def get_media_group_messages(initial_message, message_id: str, peer) -> li
         return media_group
 
     # 获取前后10条消息的范围
-    start_id = max(1, int(message_id) - RANGE)
-    end_id = int(message_id) + RANGE
+    start_id = max(1, message_id - RANGE)
+    end_id = message_id + RANGE
 
     try:
         # 转换 range 为列表
