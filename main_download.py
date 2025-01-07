@@ -170,7 +170,7 @@ async def handle_media_group(event: events.NewMessage.Event, message, message_id
 
 async def prepare_album_file(msg: Message, client: TelegramClient):
     """准备相册文件的上传对象"""
-    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile() as temp_file:
         file_path = await msg.download_media(file=temp_file.name)
         thumb_path = None
 
@@ -189,7 +189,6 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
                 mime_type=msg.media.document.mime_type or "application/octet-stream",
                 attributes=msg.media.document.attributes,
             )
-
 
 async def get_media_group_messages(initial_message, message_id: str, peer) -> list:
     media_group = [initial_message]
