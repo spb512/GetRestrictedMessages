@@ -226,7 +226,7 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
                 if (msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024) or (
                         msg.media.document.mime_type == "image/heic"):
                     thumb_path = await client.download_media(
-                        msg.media, file=f"{temp_file.name}_thumb.jpg", thumb=-1
+                        msg, file=f"{temp_file.name}_thumb.jpg", thumb=-1
                     )
                 return InputMediaUploadedDocument(
                     file=await client.upload_file(file_path),
