@@ -42,7 +42,6 @@ except Exception as e:
 
 # 定义处理新消息的函数
 async def on_new_link(event: events.NewMessage.Event) -> None:
-    global comment_id
     text = event.text
     if not text:
         return
@@ -57,6 +56,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     # 检查是否包含 '?comment' 参数
     is_comment = '?comment' in text
 
+    comment_id = None
     if is_comment:
         comment_id = int(text.split('?comment=')[1])
     # 去除链接中的 '?single' 或 '?comment' 参数
@@ -161,7 +161,7 @@ async def handle_single_message(event: events.NewMessage.Event, message) -> None
                 timestamp = int(time.time())
                 thumb_filename = f"{message.media.document.id}_{timestamp}_thumbnail.jpg"
                 thumb_path = await client.download_media(
-                    message.media,
+                    message,
                     file=thumb_filename,
                     thumb=-1  # -1 表示下载最高质量的缩略图
                 )
@@ -214,7 +214,7 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
     suffix = ".jpg" if isinstance(msg.media,
                                   MessageMediaPhoto) else ".mp4" if "video/mp4" in msg.media.document.mime_type else ""
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
-        file_path = await msg.download_media(file=temp_file.name)
+        file_path = await client.download_media(msg, file=temp_file.name)
         thumb_path = None
 
         try:
