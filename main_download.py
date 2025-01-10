@@ -3,6 +3,7 @@ import logging
 import os
 import tempfile
 import time
+import urllib
 
 from decouple import config
 from telethon import TelegramClient, events
@@ -48,35 +49,19 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         return
 
     # 检查消息是否包含有效的Telegram链接
-    if not (text.startswith("https://t.me") or text.startswith("http://t.me")):
+    if not text.startswith(("https://t.me", "http://t.me")):
         return
 
-    # 检查是否包含 '?single' 参数
-    is_single = '?single' in text
-
-    # 检查是否包含 '?comment' 参数
-    is_comment = 'comment=' in text
-
-    comment_id = None
-    if is_comment:
-        comment_id = int(text.split('comment=')[1])
-    # 去除链接中的 '?single' 或 '?comment' 参数
-    text = text.split('?')[0]
+    query = urllib.parse.urlparse(text).query
+    params = dict(urllib.parse.parse_qsl(query))
+    is_single = 'single' in text
+    is_comment = 'comment' in params
 
     try:
-        # 解析链接以提取 chat_id 和 message_id
-        parts = text.lstrip('https://').lstrip('http://').split('/')
-        chat_id = parts[2 if parts[1] in ['c', 's'] else 1]
-        message_id = parts[-1]
-    except IndexError:
+        chat_id, message_id = await parse_url(text.split('?')[0])
+    except ValueError:
         await event.reply("无效链接")
         return
-
-    if not message_id.isdigit():
-        await event.reply("无效链接")
-        return
-    else:
-        message_id = int(message_id)
 
     if chat_id.isdigit():
         peer = int(chat_id)
@@ -100,6 +85,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     # print(message.stringify())
 
     if is_comment:
+        comment_id = int(params.get('comment'))
         # 获取频道实体
         channel = await client.get_entity(chat_id)
         comment_message, comment_grouped_id = await get_comment_message(
@@ -116,6 +102,8 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             ):
                 if reply.grouped_id == comment_grouped_id:
                     comment_media_group.append(reply)
+            # 反转列表
+            comment_media_group.reverse()
             await handle_media_group(event, comment_message, comment_media_group)
     else:
         if is_single:
@@ -124,6 +112,19 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             # 获取属于同一组的消息
             media_group = await get_media_group_messages(message, message_id, peer)
             await handle_media_group(event, message, media_group)
+
+
+async def parse_url(text: str):
+    """解析链接，提取 chat_id 和 message_id"""
+    parsed_url = urllib.parse.urlparse(text)
+    path_parts = parsed_url.path.strip('/').split('/')
+    if len(path_parts) < 2:
+        raise ValueError("无效的URL")
+    chat_id = path_parts[1] if path_parts[0] in ['c', 's'] else path_parts[0]
+    message_id = path_parts[-1]
+    if not message_id.isdigit():
+        raise ValueError("无效的message_id")
+    return chat_id, int(message_id)
 
 
 async def get_comment_message(client: TelegramClient, channel, message_id, comment_id):
