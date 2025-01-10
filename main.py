@@ -1,4 +1,5 @@
 import logging
+import urllib.parse
 
 from decouple import config
 from telethon import TelegramClient, events
@@ -41,25 +42,15 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         return
 
     # 检查消息是否包含有效的Telegram链接
-    if not (text.startswith("https://t.me") or text.startswith("http://t.me")):
+    if not text.startswith(("https://t.me", "http://t.me")):
         return
 
     # 检查是否包含 '?single' 参数
-    is_single = '?single' in text
-
-    # 去除链接中的 '?single' 参数
-    text = text.split('?')[0]
+    is_single = 'single' in text
 
     try:
-        # 解析链接以提取 chat_id 和 message_id
-        parts = text.lstrip('https://').lstrip('http://').split('/')
-        chat_id = parts[2 if parts[1] in ['c', 's'] else 1]
-        message_id = parts[-1]
-    except IndexError:
-        await event.reply("无效链接")
-        return
-
-    if not message_id.isdigit():
+        chat_id, message_id = await parse_url(text.split('?')[0])
+    except ValueError:
         await event.reply("无效链接")
         return
 
@@ -72,7 +63,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
 
     try:
         # 获取指定聊天中的消息
-        message = await client.get_messages(peer, ids=int(message_id))
+        message = await client.get_messages(peer, ids=message_id)
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
@@ -88,6 +79,17 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     else:
         await handle_media_group(event, message, message_id, peer)
 
+async def parse_url(text: str):
+    """解析链接，提取 chat_id 和 message_id"""
+    parsed_url = urllib.parse.urlparse(text)
+    path_parts = parsed_url.path.strip('/').split('/')
+    if len(path_parts) < 2:
+        raise ValueError("无效的URL")
+    chat_id = path_parts[1] if path_parts[0] in ['c', 's'] else path_parts[0]
+    message_id = path_parts[-1]
+    if not message_id.isdigit():
+        raise ValueError("无效的message_id")
+    return chat_id, int(message_id)
 
 async def handle_single_message(event: events.NewMessage.Event, message) -> None:
     try:
@@ -100,7 +102,7 @@ async def handle_single_message(event: events.NewMessage.Event, message) -> None
         await event.reply("服务器内部错误，请过段时间重试")
 
 
-async def handle_media_group(event: events.NewMessage.Event, message, message_id: str, peer) -> None:
+async def handle_media_group(event: events.NewMessage.Event, message, message_id, peer) -> None:
     try:
         media_group = await get_media_group_messages(message, message_id, peer)
         media_files = [msg.media for msg in media_group if msg.media]
@@ -115,7 +117,7 @@ async def handle_media_group(event: events.NewMessage.Event, message, message_id
         await event.reply("服务器内部错误，请过段时间重试")
 
 
-async def get_media_group_messages(initial_message, message_id: str, peer) -> list:
+async def get_media_group_messages(initial_message, message_id, peer) -> list:
     media_group = [initial_message]
     grouped_id = initial_message.grouped_id
 
@@ -124,8 +126,8 @@ async def get_media_group_messages(initial_message, message_id: str, peer) -> li
         return media_group
 
     # 获取前后10条消息的范围
-    start_id = max(1, int(message_id) - RANGE)
-    end_id = int(message_id) + RANGE
+    start_id = max(1, message_id - RANGE)
+    end_id = message_id + RANGE
 
     try:
         # 转换 range 为列表
