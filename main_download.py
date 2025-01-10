@@ -3,7 +3,7 @@ import logging
 import os
 import tempfile
 import time
-import urllib
+import urllib.parse
 
 from decouple import config
 from telethon import TelegramClient, events
