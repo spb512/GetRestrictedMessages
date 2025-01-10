@@ -20,6 +20,7 @@ log = logging.getLogger("TelethonSnippets")
 API_ID = config("API_ID", default=None, cast=int)
 API_HASH = config("API_HASH", default=None)
 SESSION = config("USER_SESSION", default=None)
+TARGET_BOT_ID = config("TARGET_BOT_ID", default=None, cast=int)
 AUTHS = config("AUTHS", default="")
 # 消息范围±10
 RANGE = 10
@@ -282,7 +283,7 @@ if AUTHS:
 def is_authorized(event: events.NewMessage.Event) -> bool:
     # 如果未设置 AUTH_USERS，则默认允许所有私聊
     if not AUTH_USERS:
-        return event.is_private
+        return event.is_private and event.chat_id == TARGET_BOT_ID
     # 如果设置了 AUTH_USERS，则校验是否在授权列表中
     sender_id = event.sender_id
     sender = event.sender
@@ -296,7 +297,8 @@ def is_authorized(event: events.NewMessage.Event) -> bool:
     # log.info(f"是否在授权用户列表 (用户名)：{sender_name in AUTH_USERS if sender_name else False}")
 
     # 校验 ID 或用户名是否在授权列表中
-    return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private
+    return (sender_id in AUTH_USERS or (
+        sender_name in AUTH_USERS if sender_name else False)) and event.is_private and event.chat_id == TARGET_BOT_ID
 
 
 client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
