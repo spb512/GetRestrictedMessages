@@ -55,11 +55,11 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     is_single = '?single' in text
 
     # 检查是否包含 '?comment' 参数
-    is_comment = '?comment' in text
+    is_comment = 'comment=' in text
 
     comment_id = None
     if is_comment:
-        comment_id = int(text.split('?comment=')[1])
+        comment_id = int(text.split('comment=')[1])
     # 去除链接中的 '?single' 或 '?comment' 参数
     text = text.split('?')[0]
 
@@ -99,35 +99,31 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
 
     # print(message.stringify())
 
-    # 如果链接包含 '?single' 参数，则只处理当前消息
-    if is_single:
-        await handle_single_message(event, message)
-    elif is_comment:
+    if is_comment:
         # 获取频道实体
         channel = await client.get_entity(chat_id)
         comment_message, comment_grouped_id = await get_comment_message(
             client, channel, message_id, comment_id
         )
-
-        if not comment_message:
-            await event.reply("未找到指定的评论消息")
+        if is_single:
+            await handle_single_message(event, comment_message)
         else:
-            if not comment_grouped_id:
-                await handle_single_message(event, comment_message)
-            else:
-                # 获取属于同一组的所有消息
-                comment_media_group = []
-                async for reply in client.iter_messages(
-                        entity=channel,
-                        reply_to=message_id
-                ):
-                    if reply.grouped_id == comment_grouped_id:
-                        comment_media_group.append(reply)
-                await handle_media_group(event, comment_message, comment_media_group)
+            # 获取属于同一组的所有消息
+            comment_media_group = []
+            async for reply in client.iter_messages(
+                    entity=channel,
+                    reply_to=message_id
+            ):
+                if reply.grouped_id == comment_grouped_id:
+                    comment_media_group.append(reply)
+            await handle_media_group(event, comment_message, comment_media_group)
     else:
-        # 获取属于同一组的消息
-        media_group = await get_media_group_messages(message, message_id, peer)
-        await handle_media_group(event, message, media_group)
+        if is_single:
+            await handle_single_message(event, message)
+        else:
+            # 获取属于同一组的消息
+            media_group = await get_media_group_messages(message, message_id, peer)
+            await handle_media_group(event, message, media_group)
 
 
 async def get_comment_message(client: TelegramClient, channel, message_id, comment_id):
