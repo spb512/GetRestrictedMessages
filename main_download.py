@@ -9,7 +9,7 @@ from decouple import config
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.types import MessageMediaDocument, InputMediaUploadedDocument, InputMediaUploadedPhoto, \
-    MessageMediaPhoto, Message
+    MessageMediaPhoto, Message, PeerChannel
 
 # 初始化日志记录器
 logging.basicConfig(
@@ -64,9 +64,9 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         return
 
     if chat_id.isdigit():
-        peer = int(chat_id)
+        peer = PeerChannel(int(chat_id))
     elif chat_id.startswith("-100"):
-        peer = int(chat_id)
+        peer = PeerChannel(int(chat_id))
     else:
         peer = chat_id
 
