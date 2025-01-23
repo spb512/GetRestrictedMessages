@@ -1,6 +1,7 @@
 import logging
 import urllib.parse
 
+import requests
 from decouple import config
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -15,6 +16,7 @@ log = logging.getLogger("TelethonSnippets")
 API_ID = config("API_ID", default=None, cast=int)
 API_HASH = config("API_HASH", default=None)
 SESSION = config("BOT_SESSION", default=None)
+BOT_TOKEN = config("BOT_TOKEN", default=None)
 AUTHS = config("AUTHS", default="")
 # 消息范围±10
 RANGE = 10
@@ -73,11 +75,32 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         await event.reply("找不到聊天记录！要么无效，要么先以此帐户加入！")
         return
 
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
+    params = {"chat_id": f"@{chat_id}"}
+    result = requests.get(url, params=params)
+    has_protected_content = False
+    if result and result.json().get("ok"):
+        channel = result.json().get("result")
+        has_protected_content = channel.get("has_protected_content", False)
+
     # 如果链接包含 '?single' 参数，则只处理当前消息
     if is_single:
-        await handle_single_message(event, message)
+        if has_protected_content:
+            await handle_single_message(event, message)
+        else:
+            # 如果 has_protected_content 为 False，直接转发消息
+            await client.forward_messages(event.chat_id, message)
+            await client.send_message(event.chat_id, "转发完成，此消息允许直接转发哦", reply_to=event.message.id)
     else:
-        await handle_media_group(event, message, message_id, peer)
+        if has_protected_content:
+            media_group = await get_media_group_messages(message, message_id, peer)
+            await handle_media_group(event, message, media_group)
+        else:
+            # 如果 has_protected_content 为 False，直接转发消息
+            media_group = await get_media_group_messages(message, message_id, peer)
+            await client.forward_messages(event.chat_id, media_group)
+            await client.send_message(event.chat_id, "转发完成，此消息允许直接转发哦", reply_to=event.message.id)
+
 
 async def parse_url(text: str):
     """解析链接，提取 chat_id 和 message_id"""
@@ -91,6 +114,7 @@ async def parse_url(text: str):
         raise ValueError("无效的message_id")
     return chat_id, int(message_id)
 
+
 async def handle_single_message(event: events.NewMessage.Event, message) -> None:
     try:
         if message.media:
@@ -102,9 +126,8 @@ async def handle_single_message(event: events.NewMessage.Event, message) -> None
         await event.reply("服务器内部错误，请过段时间重试")
 
 
-async def handle_media_group(event: events.NewMessage.Event, message, message_id, peer) -> None:
+async def handle_media_group(event: events.NewMessage.Event, message, media_group) -> None:
     try:
-        media_group = await get_media_group_messages(message, message_id, peer)
         media_files = [msg.media for msg in media_group if msg.media]
 
         if media_files:
