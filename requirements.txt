@@ -1,2 +1,3 @@
-python-decouple
-telethon
+python-decouple~=3.8
+telethon~=1.38.1
+requests~=2.32.3
