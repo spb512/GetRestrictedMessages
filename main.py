@@ -1,10 +1,16 @@
+import asyncio
 import logging
+import os
+import tempfile
+import time
 import urllib.parse
 
 import requests
 from decouple import config
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
+from telethon.tl.types import MessageMediaDocument, PeerChannel, Message, MessageMediaPhoto, InputMediaUploadedPhoto, \
+    InputMediaUploadedDocument
 
 # 初始化日志记录器
 logging.basicConfig(
@@ -15,21 +21,25 @@ log = logging.getLogger("TelethonSnippets")
 # 从环境变量中获取配置
 API_ID = config("API_ID", default=None, cast=int)
 API_HASH = config("API_HASH", default=None)
-SESSION = config("BOT_SESSION", default=None)
+BOT_SESSION = config("BOT_SESSION", default=None)
+USER_SESSION = config("USER_SESSION", default=None)
 BOT_TOKEN = config("BOT_TOKEN", default=None)
 AUTHS = config("AUTHS", default="")
 # 消息范围±10
 RANGE = 10
 
-if not all([API_ID, API_HASH, SESSION]):
-    log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、SESSION")
+if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
+    log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、BOT_SESSION、USER_SESSION")
     exit(1)
 
 log.info("连接机器人。")
 try:
     # 使用会话字符串初始化Telegram客户端
-    client = TelegramClient(
-        StringSession(SESSION), api_id=API_ID, api_hash=API_HASH
+    bot_client = TelegramClient(
+        StringSession(BOT_SESSION), api_id=API_ID, api_hash=API_HASH
+    ).start()
+    user_client = TelegramClient(
+        StringSession(USER_SESSION), api_id=API_ID, api_hash=API_HASH
     ).start()
 except Exception as e:
     log.exception("启动客户端失败")
@@ -47,8 +57,10 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     if not text.startswith(("https://t.me", "http://t.me")):
         return
 
-    # 检查是否包含 '?single' 参数
+    query = urllib.parse.urlparse(text).query
+    params = dict(urllib.parse.parse_qsl(query))
     is_single = 'single' in text
+    is_comment = 'comment' in params
 
     try:
         chat_id, message_id = await parse_url(text.split('?')[0])
@@ -56,50 +68,84 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         await event.reply("无效链接")
         return
 
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
     if chat_id.isdigit():
-        peer = int(chat_id)
-    elif chat_id.startswith("-100"):
-        peer = int(chat_id)
+        peer = PeerChannel(int(chat_id))
+        req_params = {"chat_id": utils.get_peer_id(peer)}
     else:
         peer = chat_id
+        req_params = {"chat_id": f"@{chat_id}"}
 
-    try:
-        # 获取指定聊天中的消息
-        message = await client.get_messages(peer, ids=message_id)
-    except Exception as e:
-        log.exception(f"Error: {e}")
-        await event.reply("服务器内部错误，请过段时间重试")
-        return
-
-    if not message:
-        await event.reply("找不到聊天记录！要么无效，要么先以此帐户加入！")
-        return
-
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
-    params = {"chat_id": f"@{chat_id}"}
-    result = requests.get(url, params=params)
+    result = requests.get(url, params=req_params)
     has_protected_content = False
+    peer_type = "channel"
     if result and result.json().get("ok"):
         channel = result.json().get("result")
         has_protected_content = channel.get("has_protected_content", False)
+        peer_type = channel.get("type", "channel")
 
-    # 如果链接包含 '?single' 参数，则只处理当前消息
-    if is_single:
-        if has_protected_content:
-            await handle_single_message(event, message)
+    if not has_protected_content:
+        await bot_client.send_message(event.chat_id, "此消息允许转发！无需使用本机器人", reply_to=event.message.id)
+        return
+
+    if peer_type == "channel":  # 频道消息处理
+        try:
+            # 获取指定聊天中的消息
+            message = await bot_client.get_messages(peer, ids=message_id)
+        except Exception as e:
+            log.exception(f"Error: {e}")
+            await event.reply("服务器内部错误，请过段时间重试")
+            return
+
+        if not message:
+            await event.reply("找不到聊天记录！要么无效，要么先以此帐户加入！")
+            return
+        # 如果链接包含 'single' 参数，则只处理当前消息
+        if is_single:
+            await bot_handle_single_message(event, message)
         else:
-            # 如果 has_protected_content 为 False，直接转发消息
-            await client.forward_messages(event.chat_id, message)
-            await client.send_message(event.chat_id, "转发完成，此消息允许直接转发哦", reply_to=event.message.id)
-    else:
-        if has_protected_content:
-            media_group = await get_media_group_messages(message, message_id, peer)
-            await handle_media_group(event, message, media_group)
+            media_group = await get_media_group_messages(message, message_id, peer, bot_client)
+            await bot_handle_media_group(event, message, media_group)
+    else:  # 群组消息处理
+        try:
+            # 获取指定聊天中的消息
+            message = await user_client.get_messages(peer, ids=message_id)
+        except Exception as e:
+            log.exception(f"Error: {e}")
+            await event.reply("服务器内部错误，请过段时间重试")
+            return
+
+        if not message:
+            await event.reply("找不到聊天记录！要么无效，要么先以此帐户加入！")
+            return
+        if is_comment:
+            comment_id = int(params.get('comment'))
+            # 获取频道实体
+            channel = await user_client.get_entity(chat_id)
+            comment_message, comment_grouped_id = await get_comment_message(
+                user_client, channel, message_id, comment_id
+            )
+            if is_single:
+                await user_handle_single_message(event, comment_message)
+            else:
+                # 获取属于同一组的所有消息
+                comment_media_group = []
+                async for reply in user_client.iter_messages(
+                        entity=channel,
+                        reply_to=message_id
+                ):
+                    if reply.grouped_id == comment_grouped_id:
+                        comment_media_group.append(reply)
+                # 反转列表
+                comment_media_group.reverse()
+                await user_handle_media_group(event, comment_message, comment_media_group)
         else:
-            # 如果 has_protected_content 为 False，直接转发消息
-            media_group = await get_media_group_messages(message, message_id, peer)
-            await client.forward_messages(event.chat_id, media_group)
-            await client.send_message(event.chat_id, "转发完成，此消息允许直接转发哦", reply_to=event.message.id)
+            if is_single:
+                await user_handle_single_message(event, message)
+            else:
+                # 获取属于同一组的消息
+                media_group = await get_media_group_messages(message, message_id, peer, user_client)
+                await user_handle_media_group(event, message, media_group)
 
 
 async def parse_url(text: str):
@@ -115,32 +161,144 @@ async def parse_url(text: str):
     return chat_id, int(message_id)
 
 
-async def handle_single_message(event: events.NewMessage.Event, message) -> None:
+async def user_handle_media_group(event: events.NewMessage.Event, message, media_group) -> None:
     try:
-        if message.media:
-            await client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
+        # 发送提示消息
+        status_message = await event.reply("转存中，请稍等...")
+
+        # 收集所有文本作为 caption
+        captions = [msg.text if msg.text is not None else '' for msg in media_group]
+
+        # 构造相册的文件对象
+        album_files = await asyncio.gather(*[prepare_album_file(msg) for msg in media_group if msg.media])
+        if album_files:
+            await bot_client.send_file(event.chat_id, file=album_files, caption=captions, reply_to=event.message.id)
         else:
-            await client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+            # 如果消息不包含媒体，发送文本消息
+            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+        # 删除提示消息
+        await status_message.delete()
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
 
 
-async def handle_media_group(event: events.NewMessage.Event, message, media_group) -> None:
+async def prepare_album_file(msg: Message):
+    """准备相册文件的上传对象"""
+    # 为临时文件添加扩展名
+    suffix = ".jpg" if isinstance(msg.media,
+                                  MessageMediaPhoto) else ".mp4" if "video/mp4" in msg.media.document.mime_type else ""
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+        file_path = await user_client.download_media(msg, file=temp_file.name)
+        thumb_path = None
+
+        try:
+            if isinstance(msg.media, MessageMediaPhoto):
+                # print(file_path)
+                return InputMediaUploadedPhoto(file=await bot_client.upload_file(file_path))
+
+            elif isinstance(msg.media, MessageMediaDocument):
+                if (msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024) or (
+                        msg.media.document.mime_type == "image/heic"):
+                    thumb_path = await user_client.download_media(
+                        msg, file=f"{temp_file.name}_thumb.jpg", thumb=-1
+                    )
+                return InputMediaUploadedDocument(
+                    file=await bot_client.upload_file(file_path),
+                    thumb=await bot_client.upload_file(thumb_path) if thumb_path else None,
+                    mime_type=msg.media.document.mime_type or "application/octet-stream",
+                    attributes=msg.media.document.attributes,
+                )
+        finally:
+            # 删除临时文件
+            os.remove(file_path)
+            if thumb_path:
+                os.remove(thumb_path)
+
+
+async def get_comment_message(client: TelegramClient, channel, message_id, comment_id):
+    """从评论中获取指定的评论消息及其 grouped_id"""
+    async for reply in client.iter_messages(
+            entity=channel,
+            reply_to=message_id
+    ):
+        if reply.id == comment_id:
+            return reply, reply.grouped_id  # 返回匹配的评论消息及其 grouped_id
+    return None, None  # 如果没有找到，返回 None
+
+
+async def bot_handle_single_message(event: events.NewMessage.Event, message) -> None:
+    try:
+        if message.media:
+            await bot_client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
+        else:
+            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+    except Exception as e:
+        log.exception(f"Error: {e}")
+        await event.reply("服务器内部错误，请过段时间重试")
+
+
+async def user_handle_single_message(event: events.NewMessage.Event, message) -> None:
+    try:
+        # 发送提示消息
+        status_message = await event.reply("转存中，请稍等...")
+        if message.media:
+            # 判断原始发送方式
+            force_document = False
+            if isinstance(message.media, MessageMediaDocument) and (
+                    message.media.document.mime_type == 'image/jpeg' or (
+                    message.media.document.mime_type == 'video/mp4' and not message.media.video) or message.media.document.mime_type == 'image/heic'):
+                force_document = True
+
+            # 先下载文件
+            file_path = await message.download_media()
+            if isinstance(message.media, MessageMediaDocument) and (
+                    (
+                            message.media.document.mime_type == 'video/mp4' and message.media.document.size > 10 * 1024 * 1024) or message.media.document.mime_type == 'image/heic'):
+                # 下载缩略图
+                timestamp = int(time.time())
+                thumb_filename = f"{message.media.document.id}_{timestamp}_thumbnail.jpg"
+                thumb_path = await user_client.download_media(
+                    message,
+                    file=thumb_filename,
+                    thumb=-1  # -1 表示下载最高质量的缩略图
+                )
+                await bot_client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
+                                           attributes=message.media.document.attributes, thumb=thumb_path,
+                                           force_document=force_document)
+                os.remove(thumb_path)  # 发送后删除缩略图
+            elif isinstance(message.media, MessageMediaDocument) and message.media.document.mime_type == 'audio/mpeg':
+                await bot_client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
+                                           attributes=message.media.document.attributes,
+                                           force_document=force_document)
+            else:
+                await bot_client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
+                                           force_document=force_document)
+            os.remove(file_path)  # 发送后删除文件
+        else:
+            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+        # 删除提示消息
+        await status_message.delete()
+    except Exception as e:
+        log.exception(f"Error: {e}")
+        await event.reply("服务器内部错误，请过段时间重试")
+
+
+async def bot_handle_media_group(event: events.NewMessage.Event, message, media_group) -> None:
     try:
         media_files = [msg.media for msg in media_group if msg.media]
 
         if media_files:
             caption = media_group[0].text
-            await client.send_file(event.chat_id, media_files, caption=caption, reply_to=event.message.id)
+            await bot_client.send_file(event.chat_id, media_files, caption=caption, reply_to=event.message.id)
         else:
-            await client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
 
 
-async def get_media_group_messages(initial_message, message_id, peer) -> list:
+async def get_media_group_messages(initial_message, message_id, peer, client: TelegramClient) -> list:
     media_group = [initial_message]
     grouped_id = initial_message.grouped_id
 
@@ -198,14 +356,20 @@ def is_authorized(event: events.NewMessage.Event) -> bool:
     return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private
 
 
-client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
+bot_client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
 
 
 async def main():
     # 获取机器人的用户信息并开始运行客户端
-    ubot_self = await client.get_me()
+    ubot_self = await bot_client.get_me()
     log.info("客户端已启动为 %d。", ubot_self.id)
-    await client.run_until_disconnected()
+    # 获取 user_client 的用户信息并启动
+    u_user = await user_client.get_me()
+    log.info("USER_SESSION 已启动为 %d。", u_user.id)
+
+    # 启动并等待两个客户端断开连接
+    await bot_client.run_until_disconnected()  # 运行 BOT_SESSION
+    await user_client.run_until_disconnected()  # 运行 USER_SESSION
 
 
-client.loop.run_until_complete(main())
+bot_client.loop.run_until_complete(main())
