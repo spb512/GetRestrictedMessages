@@ -17,6 +17,8 @@ logging.basicConfig(
     level=logging.INFO, format="[%(levelname)s] %(asctime)s - %(message)s"
 )
 log = logging.getLogger("TelethonSnippets")
+# 设置Telethon 内部日志级别，减少日志输出
+logging.getLogger('telethon').setLevel(logging.WARNING)
 
 # 从环境变量中获取配置
 API_ID = config("API_ID", default=None, cast=int)
