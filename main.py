@@ -144,8 +144,8 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         else:
             result = await message_search(message)
             if result:  # 有结果替换为频道消息
-                channel_username, message_id = result
-                message = await bot_client.get_messages(channel_username, ids=message_id)
+                peer, message_id = result
+                message = await bot_client.get_messages(peer, ids=message_id)
                 if is_single:
                     await bot_handle_single_message(event, message)
                 else:
