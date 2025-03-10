@@ -213,6 +213,7 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
                                   MessageMediaPhoto) else ".mp4" if "video/mp4" in msg.media.document.mime_type else ""
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
         file_path = await client.download_media(msg, file=temp_file.name)
+        temp_file.close()  # 先关闭文件
         thumb_path = None
 
         try:
