@@ -26,6 +26,7 @@ API_HASH = config("API_HASH", default=None)
 BOT_SESSION = config("BOT_SESSION", default=None)
 USER_SESSION = config("USER_SESSION", default=None)
 BOT_TOKEN = config("BOT_TOKEN", default=None)
+PRIVATE_CHAT_ID = config("PRIVATE_CHAT_ID", default=None, cast=int)
 AUTHS = config("AUTHS", default="")
 # 消息范围±10
 RANGE = 10
@@ -209,9 +210,11 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
         album_files = await asyncio.gather(*[prepare_album_file(msg) for msg in media_group if msg.media])
         if album_files:
             await bot_client.send_file(event.chat_id, file=album_files, caption=captions, reply_to=event.message.id)
+            sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file=album_files, caption=captions)
         else:
             # 如果消息不包含媒体，发送文本消息
             await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+            sent_messages = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
         # 删除提示消息
         await status_message.delete()
     except Exception as e:
@@ -268,8 +271,11 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message) -> 
     try:
         if message.media:
             await bot_client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
+            sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), message.media,
+                                                       caption=message.text)
         else:
             await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+            sent_messages = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
@@ -303,17 +309,29 @@ async def user_handle_single_message(event: events.NewMessage.Event, message) ->
                 await bot_client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
                                            attributes=message.media.document.attributes, thumb=thumb_path,
                                            force_document=force_document)
+                sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
+                                                           caption=message.text,
+                                                           attributes=message.media.document.attributes,
+                                                           thumb=thumb_path,
+                                                           force_document=force_document)
                 os.remove(thumb_path)  # 发送后删除缩略图
             elif isinstance(message.media, MessageMediaDocument) and message.media.document.mime_type == 'audio/mpeg':
                 await bot_client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
                                            attributes=message.media.document.attributes,
                                            force_document=force_document)
+                sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
+                                                           caption=message.text,
+                                                           attributes=message.media.document.attributes,
+                                                           force_document=force_document)
             else:
                 await bot_client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
                                            force_document=force_document)
+                sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
+                                                           caption=message.text, force_document=force_document)
             os.remove(file_path)  # 发送后删除文件
         else:
             await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+            sent_messages = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
         # 删除提示消息
         await status_message.delete()
     except Exception as e:
@@ -328,8 +346,10 @@ async def bot_handle_media_group(event: events.NewMessage.Event, message, media_
         if media_files:
             caption = media_group[0].text
             await bot_client.send_file(event.chat_id, media_files, caption=caption, reply_to=event.message.id)
+            sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), media_files, caption=caption)
         else:
             await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+            sent_messages = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
