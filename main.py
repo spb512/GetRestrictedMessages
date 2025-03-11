@@ -1,9 +1,11 @@
 import asyncio
 import logging
 import os
+import sqlite3
 import tempfile
 import time
 import urllib.parse
+from datetime import datetime
 
 import requests
 from decouple import config
@@ -30,10 +32,124 @@ PRIVATE_CHAT_ID = config("PRIVATE_CHAT_ID", default=None, cast=int)
 AUTHS = config("AUTHS", default="")
 # 消息范围±10
 RANGE = 10
+# SQLite 数据库文件
+DB_FILE = "message_forward.db"
 
 if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
     log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、BOT_SESSION、USER_SESSION")
     exit(1)
+
+
+# 创建并初始化数据库
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS message_relations (
+        source_chat_id TEXT NOT NULL,
+        source_message_id INTEGER NOT NULL,
+        target_chat_id TEXT NOT NULL,
+        target_message_id INTEGER NOT NULL,
+        grouped_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (source_chat_id, source_message_id, target_chat_id, grouped_id)
+    )
+    ''')
+    conn.commit()
+    conn.close()
+    log.info("数据库初始化完成")
+
+
+# 保存消息转发关系
+def save_message_relation(source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id=None):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        cursor.execute('''
+        INSERT INTO message_relations 
+        (source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id, created_at) 
+        VALUES (?, ?, ?, ?, ?, ?)
+        ''', (str(source_chat_id), source_message_id, str(target_chat_id), target_message_id, grouped_id, created_at))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        # 如果已存在，则更新
+        created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        cursor.execute('''
+        UPDATE message_relations 
+        SET target_message_id = ?, grouped_id = ?, created_at = ?
+        WHERE source_chat_id = ? AND source_message_id = ? AND target_chat_id = ?
+        ''', (target_message_id, grouped_id, created_at, str(source_chat_id), source_message_id, str(target_chat_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# 批量保存媒体组消息关系
+def save_media_group_relations(source_chat_id, source_messages, target_chat_id, target_messages, grouped_id=None):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        for i in range(len(source_messages)):
+            if i < len(target_messages):
+                source_msg = source_messages[i]
+                target_msg = target_messages[i] if isinstance(target_messages[i], Message) else target_messages
+                created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+                cursor.execute('''
+                INSERT INTO message_relations 
+                (source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?)
+                ''', (str(source_chat_id), source_msg.id, str(target_chat_id),
+                      target_msg.id if isinstance(target_msg, Message) else target_msg,
+                      grouped_id, created_at))
+        conn.commit()
+    except Exception as e:
+        log.exception(f"保存媒体组关系失败: {e}")
+    finally:
+        conn.close()
+
+
+# 查找已转发的消息
+def find_forwarded_message(source_chat_id, source_message_id, target_chat_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+    SELECT target_message_id, grouped_id FROM message_relations
+    WHERE source_chat_id = ? AND source_message_id = ? AND target_chat_id = ? and grouped_id != 0
+    ''', (str(source_chat_id), source_message_id, str(target_chat_id)))
+    result = cursor.fetchone()
+    conn.close()
+    return result
+
+
+# 查找已转发的消息
+def find_forwarded_message_for_one(source_chat_id, source_message_id, target_chat_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+    SELECT target_message_id, grouped_id FROM message_relations
+    WHERE source_chat_id = ? AND source_message_id = ? AND target_chat_id = ? AND grouped_id = 0
+    ''', (str(source_chat_id), source_message_id, str(target_chat_id)))
+    result = cursor.fetchone()
+    conn.close()
+    return result
+
+
+# 查找相同组ID的所有转发消息
+def find_grouped_messages(source_chat_id, grouped_id, target_chat_id):
+    # if not grouped_id:
+    #     return []
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+    SELECT source_message_id, target_message_id FROM message_relations
+    WHERE source_chat_id = ? AND grouped_id = ? AND target_chat_id = ?
+    ORDER BY source_message_id
+    ''', (str(source_chat_id), grouped_id, str(target_chat_id)))
+    results = cursor.fetchall()
+    conn.close()
+    return results
+
 
 log.info("连接机器人。")
 try:
@@ -70,7 +186,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     except ValueError:
         await event.reply("无效链接")
         return
-
+    source_chat_id = chat_id
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
     if chat_id.isdigit():
         peer = PeerChannel(int(chat_id))
@@ -105,10 +221,10 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             return
         # 如果链接包含 'single' 参数，则只处理当前消息
         if is_single:
-            await bot_handle_single_message(event, message)
+            await bot_handle_single_message(event, message, source_chat_id)
         else:
             media_group = await get_media_group_messages(message, message_id, peer, bot_client)
-            await bot_handle_media_group(event, message, media_group)
+            await bot_handle_media_group(event, message, media_group, source_chat_id)
     else:  # 群组消息处理
         try:
             # 获取指定聊天中的消息
@@ -129,7 +245,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
                 user_client, channel, message_id, comment_id
             )
             if is_single:
-                await user_handle_single_message(event, comment_message)
+                await user_handle_single_message(event, comment_message, source_chat_id)
             else:
                 # 获取属于同一组的所有消息
                 comment_media_group = []
@@ -141,24 +257,24 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
                         comment_media_group.append(reply)
                 # 反转列表
                 comment_media_group.reverse()
-                await user_handle_media_group(event, comment_message, comment_media_group)
+                await user_handle_media_group(event, comment_message, comment_media_group, source_chat_id)
         else:
             result = await message_search(message)
             if result:  # 有结果替换为频道消息
                 peer, message_id = result
                 message = await bot_client.get_messages(peer, ids=message_id)
                 if is_single:
-                    await bot_handle_single_message(event, message)
+                    await bot_handle_single_message(event, message, source_chat_id)
                 else:
                     media_group = await get_media_group_messages(message, message_id, peer, bot_client)
-                    await bot_handle_media_group(event, message, media_group)
+                    await bot_handle_media_group(event, message, media_group, source_chat_id)
             else:
                 if is_single:
-                    await user_handle_single_message(event, message)
+                    await user_handle_single_message(event, message, source_chat_id)
                 else:
                     # 获取属于同一组的消息
                     media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                    await user_handle_media_group(event, message, media_group)
+                    await user_handle_media_group(event, message, media_group, source_chat_id)
 
 
 async def message_search(message: Message):
@@ -198,25 +314,35 @@ async def parse_url(text: str):
     return chat_id, int(message_id)
 
 
-async def user_handle_media_group(event: events.NewMessage.Event, message, media_group) -> None:
+async def user_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id) -> None:
     try:
-        # 发送提示消息
-        status_message = await event.reply("转存中，请稍等...")
+        # 先检查数据库中是否有该消息组的转发记录
+        if message.grouped_id:
+            grouped_messages = find_grouped_messages(source_chat_id, message.grouped_id, PRIVATE_CHAT_ID)
+            if grouped_messages:
+                await single_forward_message(event, grouped_messages)
+                return
+            # 发送提示消息
+            status_message = await event.reply("转存中，请稍等...")
 
-        # 收集所有文本作为 caption
-        captions = [msg.text if msg.text is not None else '' for msg in media_group]
+            # 收集所有文本作为 caption
+            captions = [msg.text if msg.text is not None else '' for msg in media_group]
 
-        # 构造相册的文件对象
-        album_files = await asyncio.gather(*[prepare_album_file(msg) for msg in media_group if msg.media])
-        if album_files:
+            # 构造相册的文件对象
+            album_files = await asyncio.gather(*[prepare_album_file(msg) for msg in media_group if msg.media])
             await bot_client.send_file(event.chat_id, file=album_files, caption=captions, reply_to=event.message.id)
             sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file=album_files, caption=captions)
+            # 保存媒体组消息关系到数据库
+            save_media_group_relations(
+                source_chat_id, media_group,
+                PRIVATE_CHAT_ID, sent_messages,
+                message.grouped_id
+            )
+            # 删除提示消息
+            await status_message.delete()
         else:
-            # 如果消息不包含媒体，发送文本消息
-            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
-            sent_messages = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
-        # 删除提示消息
-        await status_message.delete()
+            await user_handle_single_message(event, message, source_chat_id)
+
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
@@ -267,24 +393,60 @@ async def get_comment_message(client: TelegramClient, channel, message_id, comme
     return None, None  # 如果没有找到，返回 None
 
 
-async def bot_handle_single_message(event: events.NewMessage.Event, message) -> None:
+async def bot_handle_single_message(event: events.NewMessage.Event, message, source_chat_id) -> None:
     try:
+        # 检查数据库中是否有该消息的转发记录
+        relation = find_forwarded_message_for_one(source_chat_id, message.id, PRIVATE_CHAT_ID)
+        if not relation:
+            relation = find_forwarded_message(source_chat_id, message.id, PRIVATE_CHAT_ID)
+        if relation:
+            await grou_forward_message(event, relation)
+            return
+
         if message.media:
             await bot_client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
-            sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), message.media,
-                                                       caption=message.text)
+            sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), message.media,
+                                                      caption=message.text)
         else:
             await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
-            sent_messages = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
+            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
+        # 保存消息关系到数据库
+        save_message_relation(
+            source_chat_id, message.id,
+            PRIVATE_CHAT_ID, sent_message.id,
+            0
+        )
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
 
 
-async def user_handle_single_message(event: events.NewMessage.Event, message) -> None:
+async def grou_forward_message(event, relation):
+    # 如果有记录，直接转发保存的消息
+    target_message_id = relation[0]
+    log.info(f"找到已转发消息记录，直接转发: {target_message_id}")
+    await event.reply("该消息已经转发过，正在重新发送...")
+    # 转发之前转发过的消息
+    await bot_client.forward_messages(
+        entity=event.chat_id,
+        messages=target_message_id,
+        from_peer=PeerChannel(PRIVATE_CHAT_ID)
+    )
+
+
+async def user_handle_single_message(event: events.NewMessage.Event, message, source_chat_id) -> None:
     try:
+        # 检查数据库中是否有该消息的转发记录
+        relation = find_forwarded_message_for_one(source_chat_id, message.id, PRIVATE_CHAT_ID)
+        if not relation:
+            relation = find_forwarded_message(source_chat_id, message.id, PRIVATE_CHAT_ID)
+        if relation:
+            await grou_forward_message(event, relation)
+            return
+
         # 发送提示消息
         status_message = await event.reply("转存中，请稍等...")
+
         if message.media:
             # 判断原始发送方式
             force_document = False
@@ -309,29 +471,35 @@ async def user_handle_single_message(event: events.NewMessage.Event, message) ->
                 await bot_client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
                                            attributes=message.media.document.attributes, thumb=thumb_path,
                                            force_document=force_document)
-                sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
-                                                           caption=message.text,
-                                                           attributes=message.media.document.attributes,
-                                                           thumb=thumb_path,
-                                                           force_document=force_document)
+                sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
+                                                          caption=message.text,
+                                                          attributes=message.media.document.attributes,
+                                                          thumb=thumb_path,
+                                                          force_document=force_document)
                 os.remove(thumb_path)  # 发送后删除缩略图
             elif isinstance(message.media, MessageMediaDocument) and message.media.document.mime_type == 'audio/mpeg':
                 await bot_client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
                                            attributes=message.media.document.attributes,
                                            force_document=force_document)
-                sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
-                                                           caption=message.text,
-                                                           attributes=message.media.document.attributes,
-                                                           force_document=force_document)
+                sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
+                                                          caption=message.text,
+                                                          attributes=message.media.document.attributes,
+                                                          force_document=force_document)
             else:
                 await bot_client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
                                            force_document=force_document)
-                sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
-                                                           caption=message.text, force_document=force_document)
+                sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
+                                                          caption=message.text, force_document=force_document)
             os.remove(file_path)  # 发送后删除文件
         else:
             await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
-            sent_messages = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
+            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
+        # 保存消息关系到数据库
+        save_message_relation(
+            source_chat_id, message.id,
+            PRIVATE_CHAT_ID, sent_message.id,
+            0
+        )
         # 删除提示消息
         await status_message.delete()
     except Exception as e:
@@ -339,20 +507,43 @@ async def user_handle_single_message(event: events.NewMessage.Event, message) ->
         await event.reply("服务器内部错误，请过段时间重试")
 
 
-async def bot_handle_media_group(event: events.NewMessage.Event, message, media_group) -> None:
+async def bot_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id) -> None:
     try:
-        media_files = [msg.media for msg in media_group if msg.media]
+        # 检查数据库中是否有该消息组的转发记录
+        if message.grouped_id:
+            grouped_messages = find_grouped_messages(source_chat_id, message.grouped_id, PRIVATE_CHAT_ID)
+            if grouped_messages:
+                await single_forward_message(event, grouped_messages)
+                return
 
-        if media_files:
+            media_files = [msg.media for msg in media_group if msg.media]
             caption = media_group[0].text
             await bot_client.send_file(event.chat_id, media_files, caption=caption, reply_to=event.message.id)
             sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), media_files, caption=caption)
+            # 保存媒体组消息关系到数据库
+            save_media_group_relations(
+                source_chat_id, media_group,
+                PRIVATE_CHAT_ID, sent_messages,
+                message.grouped_id
+            )
         else:
-            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
-            sent_messages = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
+            await bot_handle_single_message(event, message, source_chat_id)
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
+
+
+async def single_forward_message(event, grouped_messages):
+    await event.reply("该消息组已经转发过，正在重新发送...")
+    try:
+        target_ids = [target_id for _, target_id in grouped_messages]
+        await bot_client.forward_messages(
+            entity=event.chat_id,
+            messages=target_ids,
+            from_peer=PeerChannel(PRIVATE_CHAT_ID)
+        )
+    except Exception as e:
+        log.exception(f"批量转发媒体组消息失败: {e}")
 
 
 async def get_media_group_messages(initial_message, message_id, peer, client: TelegramClient) -> list:
@@ -417,6 +608,8 @@ bot_client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
 
 
 async def main():
+    # 初始化数据库
+    init_db()
     # 获取机器人的用户信息并开始运行客户端
     ubot_self = await bot_client.get_me()
     log.info("客户端已启动为 %d。", ubot_self.id)
