@@ -249,28 +249,25 @@ async def get_comment_message(client: TelegramClient, channel, message_id, comme
     return None, None  # 如果没有找到，返回 None
 
 
-async def grou_forward_message(event, relation):
+async def single_forward_message(event, relation):
     # 如果有记录，直接转发保存的消息
     target_message_id = relation[0]
-    log.info(f"找到已转发消息记录，直接转发: {target_message_id}")
     await event.reply("该消息已经转发过，正在重新发送...")
-    # 转发之前转发过的消息
-    await bot_client.forward_messages(
-        entity=event.chat_id,
-        messages=target_message_id,
-        from_peer=PeerChannel(PRIVATE_CHAT_ID)
-    )
+    message = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_message_id)
+    if message.media:
+        await bot_client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
+    else:
+        await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
 
 
-async def single_forward_message(event, grouped_messages):
+async def group_forward_message(event, grouped_messages):
     await event.reply("该消息组已经转发过，正在重新发送...")
     try:
         target_ids = [target_id for _, target_id in grouped_messages]
-        await bot_client.forward_messages(
-            entity=event.chat_id,
-            messages=target_ids,
-            from_peer=PeerChannel(PRIVATE_CHAT_ID)
-        )
+        messages = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_ids)
+        media_files = [msg.media for msg in messages if msg.media]
+        caption = messages[0].text
+        await bot_client.send_file(event.chat_id, media_files, caption=caption, reply_to=event.message.id)
     except Exception as e:
         log.exception(f"批量转发媒体组消息失败: {e}")
 
@@ -302,7 +299,7 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
         if message.grouped_id:
             grouped_messages = find_grouped_messages(source_chat_id, message.grouped_id, PRIVATE_CHAT_ID)
             if grouped_messages:
-                await single_forward_message(event, grouped_messages)
+                await group_forward_message(event, grouped_messages)
                 return
             # 发送提示消息
             status_message = await event.reply("转存中，请稍等...")
@@ -334,7 +331,7 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
         if not relation:
             relation = find_forwarded_message(source_chat_id, message.id, PRIVATE_CHAT_ID)
         if relation:
-            await grou_forward_message(event, relation)
+            await single_forward_message(event, relation)
             return
         # 发送提示消息
         status_message = await event.reply("转存中，请稍等...")
@@ -404,7 +401,7 @@ async def bot_handle_media_group(event: events.NewMessage.Event, message, media_
         if message.grouped_id:
             grouped_messages = find_grouped_messages(source_chat_id, message.grouped_id, PRIVATE_CHAT_ID)
             if grouped_messages:
-                await single_forward_message(event, grouped_messages)
+                await group_forward_message(event, grouped_messages)
                 return
             media_files = [msg.media for msg in media_group if msg.media]
             caption = media_group[0].text
@@ -430,7 +427,7 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
         if not relation:
             relation = find_forwarded_message(source_chat_id, message.id, PRIVATE_CHAT_ID)
         if relation:
-            await grou_forward_message(event, relation)
+            await single_forward_message(event, relation)
             return
         if message.media:
             await bot_client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
