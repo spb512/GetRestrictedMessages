@@ -16,6 +16,8 @@ import requests
 from decouple import config
 from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
+from telethon.tl.functions.bots import SetBotCommandsRequest
+from telethon.tl.types import BotCommand, BotCommandScopeDefault
 from telethon.tl.types import MessageMediaDocument, PeerChannel, Message, MessageMediaPhoto, InputMediaUploadedPhoto, \
     InputMediaUploadedDocument
 
@@ -769,20 +771,40 @@ async def main():
         global bot_client, user_client
         # 使用会话字符串初始化Telegram客户端
         bot_client = TelegramClient(
-            StringSession(BOT_SESSION), api_id=API_ID, api_hash=API_HASH
+            StringSession(BOT_SESSION), api_id=API_ID, api_hash=API_HASH, proxy=('socks5', '127.0.0.1', 10808)
         )
         user_client = TelegramClient(
-            StringSession(USER_SESSION), api_id=API_ID, api_hash=API_HASH
+            StringSession(USER_SESSION), api_id=API_ID, api_hash=API_HASH, proxy=('socks5', '127.0.0.1', 10808)
         )
         # 启动客户端
         await bot_client.start()
         await user_client.start()
+
+        # 设置机器人命令菜单
+        commands = [
+            BotCommand(command="start", description="使用方法"),
+            BotCommand(command="user", description="用户中心"),
+            BotCommand(command="buy", description="购买次数")
+        ]
+        await bot_client(SetBotCommandsRequest(
+            scope=BotCommandScopeDefault(),
+            lang_code="",
+            commands=commands
+        ))
+
     except Exception as e:
         log.exception("启动客户端失败")
         log.exception(f"Error: {e}")
         exit(1)
+
     # 注册消息处理器
     bot_client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
+
+    # 注册命令处理器
+    bot_client.add_event_handler(cmd_start, events.NewMessage(pattern='/start', func=is_authorized))
+    bot_client.add_event_handler(cmd_user, events.NewMessage(pattern='/user', func=is_authorized))
+    bot_client.add_event_handler(cmd_buy, events.NewMessage(pattern='/buy', func=is_authorized))
+
     # 获取机器人的用户信息并开始运行客户端
     ubot_self = await bot_client.get_me()
     log.info("客户端已启动为 %d。", ubot_self.id)
@@ -797,6 +819,69 @@ async def main():
     # 启动并等待两个客户端断开连接
     await bot_client.run_until_disconnected()  # 运行 BOT_SESSION
     await user_client.run_until_disconnected()  # 运行 USER_SESSION
+
+
+# 命令处理函数
+async def cmd_start(event):
+    """处理 /start 命令，显示使用方法说明"""
+    usage_text = """🤖 使用方法 🤖
+
+1️⃣ 发送需要转发的消息链接
+2️⃣ 机器人将帮您保存该消息
+3️⃣ 每天免费5次，次日0点重置
+
+❓ 如何获取链接：
+- 在消息上点击"分享"
+- 选择"复制链接"
+- 将链接发送给机器人
+
+⚠️ 注意：私人频道暂不支持(因为需要授权，很多人担心账号安全问题)
+"""
+    await event.reply(usage_text)
+
+
+async def cmd_user(event):
+    """处理 /user 命令，显示用户中心信息"""
+    user_id = event.sender_id
+    free_quota, paid_quota, last_reset_date = get_user_quota(user_id)
+    total_quota = free_quota + paid_quota
+
+    # 获取用户名
+    sender = event.sender
+    username = sender.username if sender and sender.username else f"用户{user_id}"
+
+    user_info = f"""👤 用户中心 - @{username}
+
+📊 转发次数统计：
+  ├ 今日剩余：{total_quota} 次
+  ├ 免费次数：{free_quota} 次
+  └ 付费次数：{paid_quota} 次
+
+🔄 下次重置时间：次日0点
+📅 上次重置日期：{last_reset_date}
+
+💰 购买更多次数请点击 /buy
+"""
+    await event.reply(user_info)
+
+
+async def cmd_buy(event):
+    """处理 /buy 命令，显示充值信息"""
+    buy_text = """💰 购买次数 💰
+
+📦 转发次数套餐：
+  ├ 基础包：25次/1$
+  ├ 标准包：150次/5$
+  └ 高级包：400次/10$
+
+
+💳 支付方式：
+  ├ 支付宝(暂不支持)
+  └ USDT(TRC20)
+
+🔐 充值遇到问题请联系管理员：@YourAdminUsername
+"""
+    await event.reply(buy_text)
 
 
 # 7. 程序入口
