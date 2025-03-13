@@ -10,7 +10,7 @@ import sqlite3
 import tempfile
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from decouple import config
@@ -276,6 +276,44 @@ def add_paid_quota(user_id, amount):
     conn.commit()
     conn.close()
     return paid_quota
+
+
+def reset_all_free_quotas():
+    """重置所有用户的免费次数"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    current_date = datetime.now().strftime('%Y-%m-%d')
+
+    # 更新所有用户的免费次数为5，并更新重置日期
+    cursor.execute('''
+    UPDATE user_forward_quota 
+    SET free_quota = 5, last_reset_date = ?, updated_at = CURRENT_TIMESTAMP
+    ''', (current_date,))
+
+    affected_rows = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    log.info(f"已重置 {affected_rows} 个用户的免费转发次数")
+    return affected_rows
+
+
+async def schedule_quota_reset():
+    """定时任务：每天0点重置所有用户的免费次数"""
+    while True:
+        # 计算距离下一个0点的秒数
+        now = datetime.now()
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_until_midnight = (tomorrow - now).total_seconds()
+
+        # 等待到0点
+        log.info(f"下一次免费次数重置将在 {seconds_until_midnight:.2f} 秒后进行")
+        await asyncio.sleep(seconds_until_midnight)
+
+        # 重置所有用户的免费次数
+        affected_users = reset_all_free_quotas()
+        log.info(f"已在 {datetime.now()} 重置了 {affected_users} 个用户的免费转发次数")
 
 
 async def process_forward_quota(event):
@@ -751,6 +789,11 @@ async def main():
     # 获取 user_client 的用户信息并启动
     u_user = await user_client.get_me()
     log.info("USER_SESSION 已启动为 %d。", u_user.id)
+
+    # 启动定时重置任务
+    asyncio.create_task(schedule_quota_reset())
+    log.info("已启动每日0点自动重置免费转发次数的定时任务")
+
     # 启动并等待两个客户端断开连接
     await bot_client.run_until_disconnected()  # 运行 BOT_SESSION
     await user_client.run_until_disconnected()  # 运行 USER_SESSION
