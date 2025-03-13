@@ -81,6 +81,19 @@ def init_db():
         PRIMARY KEY (source_chat_id, source_message_id, target_chat_id, grouped_id)
     )
     ''')
+
+    # 创建用户转发次数表
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS user_forward_quota (
+        user_id TEXT PRIMARY KEY,
+        free_quota INTEGER DEFAULT 5,
+        paid_quota INTEGER DEFAULT 0,
+        last_reset_date TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
     conn.commit()
     conn.close()
     log.info("数据库初始化完成")
@@ -168,13 +181,115 @@ def find_grouped_messages(source_chat_id, grouped_id, target_chat_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
-    SELECT source_message_id, target_message_id FROM message_relations
+    SELECT source_message_id, target_message_id FROM message_relations 
     WHERE source_chat_id = ? AND grouped_id = ? AND target_chat_id = ?
-    ORDER BY source_message_id
     ''', (str(source_chat_id), grouped_id, str(target_chat_id)))
     results = cursor.fetchall()
     conn.close()
     return results
+
+
+# 用户转发次数管理相关函数
+def get_user_quota(user_id):
+    """获取用户当前的转发次数配额"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # 检查用户是否已有记录
+    cursor.execute('SELECT free_quota, paid_quota, last_reset_date FROM user_forward_quota WHERE user_id = ?',
+                   (str(user_id),))
+    result = cursor.fetchone()
+
+    current_date = datetime.now().strftime('%Y-%m-%d')
+
+    if not result:
+        # 新用户，创建记录
+        cursor.execute(
+            'INSERT INTO user_forward_quota (user_id, free_quota, paid_quota, last_reset_date) VALUES (?, ?, ?, ?)',
+            (str(user_id), 5, 0, current_date)
+        )
+        conn.commit()
+        conn.close()
+        return 5, 0, current_date
+
+    free_quota, paid_quota, last_reset_date = result
+
+    # 检查是否需要重置免费次数（每日0点重置）
+    if last_reset_date != current_date:
+        free_quota = 5  # 重置免费次数
+        cursor.execute(
+            'UPDATE user_forward_quota SET free_quota = ?, last_reset_date = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
+            (free_quota, current_date, str(user_id))
+        )
+        conn.commit()
+
+    conn.close()
+    return free_quota, paid_quota, current_date
+
+
+def decrease_user_quota(user_id):
+    """减少用户的转发次数，优先使用免费次数"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    free_quota, paid_quota, _ = get_user_quota(user_id)
+
+    if free_quota > 0:
+        # 优先使用免费次数
+        free_quota -= 1
+        cursor.execute(
+            'UPDATE user_forward_quota SET free_quota = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
+            (free_quota, str(user_id))
+        )
+    elif paid_quota > 0:
+        # 然后使用付费次数
+        paid_quota -= 1
+        cursor.execute(
+            'UPDATE user_forward_quota SET paid_quota = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
+            (paid_quota, str(user_id))
+        )
+    else:
+        # 没有可用次数
+        conn.close()
+        return False
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def add_paid_quota(user_id, amount):
+    """为用户添加付费转发次数"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # 确保用户记录存在
+    free_quota, paid_quota, _ = get_user_quota(user_id)
+
+    # 增加付费次数
+    paid_quota += amount
+    cursor.execute(
+        'UPDATE user_forward_quota SET paid_quota = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
+        (paid_quota, str(user_id))
+    )
+
+    conn.commit()
+    conn.close()
+    return paid_quota
+
+
+async def process_forward_quota(event):
+    """处理转发次数减少并发送提示消息的公共方法"""
+    # 减少用户转发次数
+    user_id = event.sender_id
+    decrease_user_quota(user_id)
+
+    # 获取用户剩余次数
+    free_quota, paid_quota, _ = get_user_quota(user_id)
+    total_quota = free_quota + paid_quota
+
+    # 在转发成功后告知用户剩余次数
+    await event.reply(f"转发成功！您今日剩余 {total_quota} 次转发机会（免费 {free_quota} 次，付费 {paid_quota} 次）")
 
 
 # 4. 辅助函数
@@ -270,6 +385,9 @@ async def single_forward_message(event, relation):
     else:
         await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
 
+    # 处理转发次数并发送提示消息
+    await process_forward_quota(event)
+
 
 async def group_forward_message(event, grouped_messages):
     await event.reply("该消息组已经转发过，正在重新发送...")
@@ -279,6 +397,9 @@ async def group_forward_message(event, grouped_messages):
         media_files = [msg.media for msg in messages if msg.media]
         caption = messages[0].text
         await bot_client.send_file(event.chat_id, media_files, caption=caption, reply_to=event.message.id)
+
+        # 处理转发次数并发送提示消息
+        await process_forward_quota(event)
     except Exception as e:
         log.exception(f"批量转发媒体组消息失败: {e}")
 
@@ -328,6 +449,9 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
             )
             # 删除提示消息
             await status_message.delete()
+
+            # 处理转发次数并发送提示消息
+            await process_forward_quota(event)
         else:
             await user_handle_single_message(event, message, source_chat_id)
     except Exception as e:
@@ -401,6 +525,9 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
         )
         # 删除提示消息
         await status_message.delete()
+
+        # 处理转发次数并发送提示消息
+        await process_forward_quota(event)
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
@@ -424,6 +551,8 @@ async def bot_handle_media_group(event: events.NewMessage.Event, message, media_
                 PRIVATE_CHAT_ID, sent_messages,
                 message.grouped_id
             )
+            # 处理转发次数并发送提示消息
+            await process_forward_quota(event)
         else:
             await bot_handle_single_message(event, message, source_chat_id)
     except Exception as e:
@@ -453,6 +582,9 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
             PRIVATE_CHAT_ID, sent_message.id,
             0
         )
+
+        # 处理转发次数并发送提示消息
+        await process_forward_quota(event)
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请过段时间重试")
@@ -467,6 +599,16 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     # 检查消息是否包含有效的Telegram链接
     if not text.startswith(("https://t.me", "http://t.me")):
         return
+
+    # 检查用户转发次数
+    user_id = event.sender_id
+    free_quota, paid_quota, _ = get_user_quota(user_id)
+    total_quota = free_quota + paid_quota
+
+    if total_quota <= 0:
+        await event.reply("您今日的转发次数已用完！每天0点重置免费次数，或通过支付购买更多次数。")
+        return
+
     query = urllib.parse.urlparse(text).query
     params = dict(urllib.parse.parse_qsl(query))
     is_single = 'single' in text
