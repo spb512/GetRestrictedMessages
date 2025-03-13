@@ -6,6 +6,7 @@ Telethon 消息转发机器人
 import asyncio
 import logging
 import os
+import random
 import sqlite3
 import tempfile
 import time
@@ -16,6 +17,7 @@ import requests
 from decouple import config
 from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
+from telethon.tl.custom import Button
 from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault
 from telethon.tl.types import MessageMediaDocument, PeerChannel, Message, MessageMediaPhoto, InputMediaUploadedPhoto, \
@@ -38,6 +40,16 @@ USER_SESSION = config("USER_SESSION", default=None)
 BOT_TOKEN = config("BOT_TOKEN", default=None)
 PRIVATE_CHAT_ID = config("PRIVATE_CHAT_ID", default=None, cast=int)
 AUTHS = config("AUTHS", default="")
+# USDT(TRC20)钱包地址 - 用于接收付款
+USDT_WALLET = config("USDT_WALLET", default="TRxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+# TRONGRID API 密钥 - 用于查询交易
+TRONGRID_API_KEY = config("TRONGRID_API_KEY", default="")
+# TRC20 USDT 合约地址
+USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+# 自动检查交易的间隔（秒）
+TRANSACTION_CHECK_INTERVAL = config("TRANSACTION_CHECK_INTERVAL", default=60, cast=int)
+# 管理员用户ID，用于接收订单通知
+ADMIN_ID = config("ADMIN_ID", default=None, cast=int)
 # 消息范围±10
 RANGE = 10
 # SQLite 数据库文件
@@ -66,6 +78,10 @@ if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
     log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、BOT_SESSION、USER_SESSION")
     exit(1)
 
+# 全局定义客户端对象
+bot_client = None
+user_client = None
+
 
 # 3.数据库操作相关函数
 # 创建并初始化数据库
@@ -93,6 +109,25 @@ def init_db():
         last_reset_date TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
+    # 创建订单表
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS orders (
+        order_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        package_name TEXT NOT NULL,
+        amount REAL NOT NULL,
+        quota_amount INTEGER NOT NULL,
+        status TEXT DEFAULT 'pending',
+        payment_address TEXT NOT NULL,
+        tx_hash TEXT,
+        memo TEXT,
+        last_checked TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP
     )
     ''')
 
@@ -299,6 +334,388 @@ def reset_all_free_quotas():
 
     log.info(f"已重置 {affected_rows} 个用户的免费转发次数")
     return affected_rows
+
+
+# 订单管理相关函数
+def generate_order_id():
+    """生成唯一的订单ID"""
+    import uuid
+    return f"ORD-{str(uuid.uuid4())[:8].upper()}"
+
+
+async def check_trc20_transaction(order_id, wallet_address, expected_amount=None):
+    """
+    检查指定钱包地址是否收到了TRC20 USDT转账，通过查询订单ID或金额匹配
+
+    :param order_id: 订单ID，用于检查交易备注
+    :param wallet_address: 接收付款的钱包地址
+    :param expected_amount: 预期收到的金额
+    :return: 如果匹配到交易，返回交易哈希，否则返回None
+    """
+    if not TRONGRID_API_KEY:
+        log.warning("未配置TRONGRID_API_KEY，无法自动检查交易")
+        return None
+
+    # 从订单获取详细信息
+    order = get_order_by_id(order_id)
+    if not order:
+        log.error(f"找不到订单 {order_id}")
+        return None
+
+    user_id = order[1]
+    expected_amount = order[3]  # 订单金额
+
+    try:
+        # 使用TronGrid API查询交易
+        url = f"https://api.trongrid.io/v1/accounts/{wallet_address}/transactions/trc20"
+        headers = {
+            "Accept": "application/json",
+            "TRON-PRO-API-KEY": TRONGRID_API_KEY
+        }
+        params = {
+            "limit": 20,  # 限制最近的20条交易
+            "contract_address": USDT_CONTRACT,  # USDT合约地址
+            "only_confirmed": True
+        }
+
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code != 200:
+            log.error(f"查询交易失败: {response.status_code} {response.text}")
+            return None
+
+        data = response.json()
+
+        # 检查是否有符合条件的交易
+        if "data" in data:
+            transactions = data["data"]
+            for tx in transactions:
+                # 只检查USDT转入交易
+                if tx["to"] == wallet_address and tx["token_info"]["address"] == USDT_CONTRACT:
+                    # 获取交易金额（USDT有6位小数）
+                    value = float(tx["value"]) / 10 ** 6
+
+                    # 检查金额是否精确匹配
+                    if abs(value - expected_amount) < 0.00001:  # 允许0.00001美元的误差，因为我们使用5位小数
+                        # 检查交易备注是否包含订单号（可选匹配）
+                        tx_hash = tx["transaction_id"]
+
+                        # 尝试获取交易的备注信息，但不强制要求
+                        memo = ""
+                        try:
+                            tx_detail_url = f"https://api.trongrid.io/v1/transactions/{tx_hash}"
+                            tx_detail_response = requests.get(tx_detail_url, headers=headers)
+                            if tx_detail_response.status_code == 200:
+                                tx_detail = tx_detail_response.json()
+                                if "data" in tx_detail and tx_detail["data"]:
+                                    # 提取备注信息
+                                    raw_data = tx_detail["data"][0]["raw_data"]
+                                    if "data" in raw_data:
+                                        memo = bytes.fromhex(raw_data["data"][2:]).decode('utf-8', errors='ignore')
+                        except Exception as e:
+                            log.error(f"获取交易备注失败: {e}")
+                            # 备注获取失败不影响主要流程
+
+                        # 更新订单的交易哈希和备注
+                        update_order_tx_info(order_id, tx_hash, memo)
+
+                        # 完成订单 - 金额精确匹配即可确认
+                        success = complete_order(order_id, tx_hash)
+                        if success:
+                            log.info(f"自动确认订单 {order_id} 支付成功，交易哈希: {tx_hash}，金额: {value}$")
+                            # 通知用户订单已完成
+                            await notify_user_order_completed(order)
+
+                            # 通知管理员订单已自动完成
+                            if ADMIN_ID:
+                                admin_msg = f"🤖 自动确认订单 🤖\n\n订单ID: {order_id}\n用户ID: {user_id}\n金额: {expected_amount}$\n交易哈希: {tx_hash}"
+                                try:
+                                    await bot_client.send_message(ADMIN_ID, admin_msg)
+                                except Exception as e:
+                                    log.error(f"通知管理员失败: {e}")
+
+                        return tx_hash
+
+        # 更新订单最后检查时间
+        update_order_last_checked(order_id)
+        return None
+
+    except Exception as e:
+        log.exception(f"检查交易失败: {e}")
+        return None
+
+
+def update_order_tx_info(order_id, tx_hash, memo=""):
+    """更新订单的交易哈希和备注"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    try:
+        updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+        UPDATE orders 
+        SET tx_hash = ?, memo = ?, updated_at = ? 
+        WHERE order_id = ?
+        ''', (tx_hash, memo, updated_at, order_id))
+
+        conn.commit()
+    except Exception as e:
+        log.exception(f"更新订单交易信息失败: {e}")
+    finally:
+        conn.close()
+
+
+def update_order_last_checked(order_id):
+    """更新订单最后检查时间"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    try:
+        last_checked = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+        UPDATE orders 
+        SET last_checked = ?, updated_at = ? 
+        WHERE order_id = ?
+        ''', (last_checked, last_checked, order_id))
+
+        conn.commit()
+    except Exception as e:
+        log.exception(f"更新订单最后检查时间失败: {e}")
+    finally:
+        conn.close()
+
+
+async def notify_user_order_completed(order):
+    """通知用户订单已完成"""
+    # 解包订单信息
+    # order是tuple(order_id, user_id, package_name, amount, quota_amount, status, payment_address, tx_hash, memo, last_checked, created_at, updated_at, completed_at)
+    order_id = order[0]
+    user_id = order[1]
+    package_name = order[2]
+    quota = order[4]
+
+    try:
+        notification = f"""🎉 您的订单已完成 🎉
+
+🆔 订单号: {order_id}
+📦 套餐: {package_name}
+🔢 已增加次数: {quota}次
+
+您可以通过 /user 查看当前可用次数。
+"""
+        await bot_client.send_message(int(user_id), notification)
+    except Exception as e:
+        log.error(f"通知用户订单完成失败: {e}")
+
+
+def cancel_expired_order(order_id):
+    """取消超时未支付的订单"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    try:
+        # 获取订单信息以记录日志
+        cursor.execute('SELECT user_id, package_name, amount FROM orders WHERE order_id = ? AND status = "pending"',
+                       (order_id,))
+        order = cursor.fetchone()
+
+        if not order:
+            # 订单不存在或已经不是pending状态
+            return False
+
+        user_id, package_name, amount = order
+
+        # 更新订单状态为已取消
+        cancelled_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+        UPDATE orders 
+        SET status = "cancelled", updated_at = ? 
+        WHERE order_id = ?
+        ''', (cancelled_at, order_id))
+
+        conn.commit()
+        log.info(f"订单 {order_id} 因超时未支付已自动取消，用户: {user_id}, 套餐: {package_name}, 金额: {amount}$")
+        return True
+    except Exception as e:
+        log.exception(f"取消订单失败: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+async def schedule_transaction_checker():
+    """定时任务：定期检查待处理订单的交易状态和超时情况"""
+    # 支付超时时间（秒）
+    PAYMENT_TIMEOUT = 20 * 60  # 20分钟
+
+    while True:
+        try:
+            # 获取所有待处理的订单
+            pending_orders = get_all_pending_orders()
+
+            if pending_orders:
+                log.info(f"开始检查 {len(pending_orders)} 个待处理订单")
+                now = datetime.now()
+
+                for order in pending_orders:
+                    order_id = order[0]
+                    payment_address = order[6]
+                    created_at = datetime.strptime(order[10], '%Y-%m-%d %H:%M:%S')
+
+                    # 检查订单是否超时
+                    time_elapsed = (now - created_at).total_seconds()
+                    if time_elapsed > PAYMENT_TIMEOUT:
+                        # 订单已超时，取消订单
+                        cancelled = cancel_expired_order(order_id)
+                        if cancelled:
+                            # 尝试通知用户订单已取消
+                            try:
+                                user_id = order[1]
+                                package_name = order[2]
+                                amount = order[3]
+
+                                cancel_msg = f"""⏱️ 订单已超时取消 ⏱️
+
+🆔 订单号: {order_id}
+📦 套餐: {package_name}
+💰 金额: {amount}$
+
+订单因超过20分钟未支付已自动取消。
+如需继续购买，请重新选择套餐。"""
+
+                                await bot_client.send_message(int(user_id), cancel_msg)
+                            except Exception as e:
+                                log.error(f"通知用户订单取消失败: {e}")
+                        continue
+
+                    # 检查交易
+                    await check_trc20_transaction(order_id, payment_address)
+
+                    # 每个订单检查后稍微延迟，避免API请求过于频繁
+                    await asyncio.sleep(2)
+
+            # 等待下一次检查
+            await asyncio.sleep(TRANSACTION_CHECK_INTERVAL)
+
+        except Exception as e:
+            log.exception(f"交易检查任务异常: {e}")
+            await asyncio.sleep(60)  # 出错后等待1分钟再继续
+
+
+def get_all_pending_orders():
+    """获取所有待处理的订单"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT * FROM orders WHERE status = "pending" ORDER BY created_at ASC')
+    orders = cursor.fetchall()
+
+    conn.close()
+    return orders
+
+
+def create_new_order(user_id, package_name, amount, quota_amount):
+    """创建新订单，并生成独特的金额"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    order_id = generate_order_id()
+    created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 为订单生成独特金额：基础金额 + 0.00001-0.00099的随机小数（更小的随机值）
+    unique_cents = random.randint(1, 99) / 100000
+    unique_amount = round(amount + unique_cents, 5)  # 保留5位小数
+
+    try:
+        cursor.execute('''
+        INSERT INTO orders 
+        (order_id, user_id, package_name, amount, quota_amount, payment_address, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (order_id, str(user_id), package_name, unique_amount, quota_amount, USDT_WALLET, created_at, created_at))
+
+        conn.commit()
+        log.info(f"为用户 {user_id} 创建了新订单 {order_id}，金额: {unique_amount}$")
+        return order_id, unique_amount
+    except Exception as e:
+        log.exception(f"创建订单失败: {e}")
+        return None, None
+    finally:
+        conn.close()
+
+
+def get_order_by_id(order_id):
+    """通过订单ID获取订单信息"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT * FROM orders WHERE order_id = ?', (order_id,))
+    order = cursor.fetchone()
+
+    conn.close()
+    return order
+
+
+def get_user_pending_orders(user_id):
+    """获取用户的未完成订单"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT * FROM orders WHERE user_id = ? AND status = "pending" ORDER BY created_at DESC',
+                   (str(user_id),))
+    orders = cursor.fetchall()
+
+    conn.close()
+    return orders
+
+
+def complete_order(order_id, tx_hash=None):
+    """完成订单并增加用户次数"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    try:
+        # 获取订单信息
+        cursor.execute('SELECT user_id, quota_amount, status FROM orders WHERE order_id = ?', (order_id,))
+        order = cursor.fetchone()
+
+        if not order:
+            log.error(f"找不到订单 {order_id}")
+            return False
+
+        user_id, quota_amount, status = order
+
+        if status != "pending":
+            log.warning(f"订单 {order_id} 已处理过，当前状态: {status}")
+            return False
+
+        # 更新订单状态
+        completed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if tx_hash:
+            cursor.execute('''
+            UPDATE orders 
+            SET status = "completed", tx_hash = ?, updated_at = ?, completed_at = ? 
+            WHERE order_id = ?
+            ''', (tx_hash, completed_at, completed_at, order_id))
+        else:
+            cursor.execute('''
+            UPDATE orders 
+            SET status = "completed", updated_at = ?, completed_at = ? 
+            WHERE order_id = ?
+            ''', (completed_at, completed_at, order_id))
+
+        # 增加用户次数
+        add_paid_quota(user_id, quota_amount)
+
+        conn.commit()
+        log.info(f"订单 {order_id} 已完成，为用户 {user_id} 增加了 {quota_amount} 次付费转发次数")
+        return True
+    except Exception as e:
+        log.exception(f"完成订单失败: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
 
 
 async def schedule_quota_reset():
@@ -760,6 +1177,208 @@ def is_authorized(event: events.NewMessage.Event) -> bool:
     return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private
 
 
+# 按钮回调处理函数
+async def callback_handler(event):
+    """处理按钮点击事件"""
+    # 获取回调数据
+    data = event.data
+    user_id = event.sender_id
+
+    # 套餐配置
+    packages = {
+        b"buy_basic": {"name": "基础包", "price": 1, "quota": 25},
+        b"buy_standard": {"name": "标准包", "price": 5, "quota": 150},
+        b"buy_premium": {"name": "高级包", "price": 10, "quota": 400}
+    }
+
+    # 如果是购买套餐
+    if data in packages:
+        package = packages[data]
+        # 创建新订单
+        order_id, unique_amount = create_new_order(user_id, package["name"], package["price"], package["quota"])
+
+        if order_id:
+            # 生成付款信息
+            payment_text = f"""🛒 您已选择: {package['name']}
+💰 价格: {unique_amount}$  (请务必转账此精确金额)
+🔢 可获得次数: {package['quota']}次
+
+💳 请使用USDT(TRC20)支付至以下地址:
+`{USDT_WALLET}`
+
+📝 订单号: `{order_id}`
+
+⚠️ 重要：请务必转账 {unique_amount}$ 的精确金额，系统将通过金额自动匹配您的订单
+✅ 付款成功后系统将自动确认并增加您的次数"""
+            # 添加查看订单状态的按钮
+            buttons = [
+                [Button.inline("查询订单状态", data=f"check_{order_id}".encode())]
+            ]
+            try:
+                await event.edit(payment_text, buttons=buttons, parse_mode='markdown')
+            except Exception as e:
+                log.error(f"编辑消息失败: {e}")
+                await event.answer("消息更新失败，请重试", alert=True)
+
+            # 如果设置了管理员ID，发送订单通知给管理员
+            if ADMIN_ID:
+                admin_notify = f"📢 新订单通知 📢\n\n用户ID: {user_id}\n套餐: {package['name']}\n金额: {package['price']}$\n订单ID: {order_id}"
+                try:
+                    await bot_client.send_message(ADMIN_ID, admin_notify)
+                except Exception as e:
+                    log.error(f"发送管理员通知失败: {e}")
+        else:
+            try:
+                await event.edit("❌ 订单创建失败，请稍后重试或联系管理员。")
+            except Exception as e:
+                log.error(f"编辑消息失败: {e}")
+                await event.answer("消息更新失败，请重试", alert=True)
+
+    # 查询订单状态
+    elif data.startswith(b"check_"):
+        order_id = data[6:].decode('utf-8')
+        order = get_order_by_id(order_id)
+
+        if order:
+            # 假设order是tuple(order_id, user_id, package_name, amount, quota_amount, status, payment_address, tx_hash, memo, last_checked, created_at, updated_at, completed_at)
+            status = order[5]
+            package_name = order[2]
+            amount = order[3]
+            quota = order[4]
+            created_at = order[7]
+
+            status_text = {
+                "pending": "⏳ 等待付款",
+                "completed": "✅ 已完成",
+                "cancelled": "❌ 已取消"
+            }.get(status, status)
+
+            order_info = f"""📋 订单详情 📋
+            
+🆔 订单号: {order_id}
+📦 套餐: {package_name}
+💰 金额: {amount}$
+🔢 次数: {quota}次
+📅 创建时间: {created_at}
+🔄 状态: {status_text}
+
+"""
+            if status == "pending":
+                order_info += f"""💳 付款地址: `{USDT_WALLET}`
+
+⚠️ 重要：请务必转账 {amount}$ 的精确金额，系统将通过金额自动匹配您的订单
+✅ 付款成功后系统将自动确认并增加您的次数"""
+
+                buttons = [[Button.inline("刷新状态", data=f"check_{order_id}".encode())]]
+                try:
+                    # 先尝试显示"正在刷新"状态
+                    temp_info = f"""📋 订单详情 - 正在刷新... 📋
+                    
+🆔 订单号: {order_id}
+📦 套餐: {package_name}
+💰 金额: {amount}$
+🔢 次数: {quota}次
+📅 创建时间: {created_at}
+🔄 状态: {status_text} (刷新中...)
+
+"""
+                    if status == "pending":
+                        temp_info += f"""💳 付款地址: `{USDT_WALLET}`
+⚠️ 重要：请务必转账 {amount}$ 的精确到账金额，系统将通过(小数点后面)金额自动匹配您的订单
+✅ 付款成功后系统将自动确认并增加您的次数"""
+
+                    # 先显示刷新中状态
+                    await event.edit(temp_info, buttons=buttons, parse_mode='markdown')
+
+                    # 等待半秒，让用户能看到刷新效果
+                    await asyncio.sleep(0.5)
+
+                    # 然后显示最终结果
+                    await event.edit(order_info, buttons=buttons, parse_mode='markdown')
+
+                except Exception as e:
+                    error_str = str(e)
+                    if "Content of the message was not modified" in error_str:
+                        # 消息内容没变化，尝试显示临时消息
+                        log.info(f"订单状态没有变化，尝试显示临时刷新效果")
+                        try:
+                            # 添加时间戳使消息内容强制变化
+                            timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+                            temp_msg = f"""📋 订单详情 - 刷新于 {timestamp} 📋
+                            
+🆔 订单号: {order_id}
+📦 套餐: {package_name}
+💰 金额: {amount}$
+🔢 次数: {quota}次
+📅 创建时间: {created_at}
+🔄 状态: {status_text} ✓
+
+✅ 您的次数已增加，可以通过 /user 查看当前可用次数。"""
+
+                            # 先显示带时间戳的临时信息
+                            await event.edit(temp_msg, parse_mode='markdown')
+
+                            # 等待半秒，让用户能看到刷新效果
+                            await asyncio.sleep(0.5)
+
+                            # 然后恢复原始信息
+                            await event.edit(order_info, parse_mode='markdown')
+                        except Exception as inner_e:
+                            log.error(f"显示临时刷新消息失败: {inner_e}")
+                    else:
+                        log.error(f"编辑消息失败: {error_str}")
+            elif status == "completed":
+                order_info += "✅ 您的次数已增加，可以通过 /user 查看当前可用次数。"
+                try:
+                    await event.edit(order_info, parse_mode='markdown')
+                except Exception as e:
+                    error_str = str(e)
+                    if "Content of the message was not modified" in error_str:
+                        # 消息内容没变化，尝试显示临时消息
+                        log.info(f"订单状态没有变化，尝试显示临时刷新效果")
+                        try:
+                            # 添加时间戳使消息内容强制变化
+                            timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+                            temp_msg = f"""📋 订单详情 - 刷新于 {timestamp} 📋
+                            
+🆔 订单号: {order_id}
+📦 套餐: {package_name}
+💰 金额: {amount}$
+🔢 次数: {quota}次
+📅 创建时间: {created_at}
+🔄 状态: {status_text} ✓
+
+✅ 您的次数已增加，可以通过 /user 查看当前可用次数。"""
+
+                            # 先显示带时间戳的临时信息
+                            await event.edit(temp_msg, parse_mode='markdown')
+
+                            # 等待半秒，让用户能看到刷新效果
+                            await asyncio.sleep(0.5)
+
+                            # 然后恢复原始信息
+                            await event.edit(order_info, parse_mode='markdown')
+                        except Exception as inner_e:
+                            log.error(f"显示临时刷新消息失败: {inner_e}")
+                    else:
+                        log.error(f"编辑消息失败: {error_str}")
+            elif status == "cancelled":
+                order_info += "⏱️ 此订单已因超时未支付而自动取消。如需继续购买，请重新选择套餐。"
+                try:
+                    await event.edit(order_info, parse_mode='markdown')
+                except Exception as e:
+                    log.error(f"编辑消息失败: {e}")
+        else:
+            try:
+                await event.edit("❌ 找不到此订单，请检查订单号是否正确。")
+            except Exception as e:
+                log.error(f"编辑消息失败: {e}")
+
+    # 其他回调数据
+    else:
+        await event.answer("未知操作", alert=True)
+
+
 # 6. 主函数定义
 async def main():
     # 初始化数据库
@@ -784,7 +1403,8 @@ async def main():
         commands = [
             BotCommand(command="start", description="使用方法"),
             BotCommand(command="user", description="用户中心"),
-            BotCommand(command="buy", description="购买次数")
+            BotCommand(command="buy", description="购买次数"),
+            BotCommand(command="check", description="查询订单")
         ]
         await bot_client(SetBotCommandsRequest(
             scope=BotCommandScopeDefault(),
@@ -804,6 +1424,11 @@ async def main():
     bot_client.add_event_handler(cmd_start, events.NewMessage(pattern='/start', func=is_authorized))
     bot_client.add_event_handler(cmd_user, events.NewMessage(pattern='/user', func=is_authorized))
     bot_client.add_event_handler(cmd_buy, events.NewMessage(pattern='/buy', func=is_authorized))
+    bot_client.add_event_handler(cmd_check, events.NewMessage(pattern='/check', func=is_authorized))
+    bot_client.add_event_handler(cmd_admin_confirm, events.NewMessage(pattern='/confirm'))
+
+    # 注册回调处理器
+    bot_client.add_event_handler(callback_handler, events.CallbackQuery())
 
     # 获取机器人的用户信息并开始运行客户端
     ubot_self = await bot_client.get_me()
@@ -815,6 +1440,10 @@ async def main():
     # 启动定时重置任务
     asyncio.create_task(schedule_quota_reset())
     log.info("已启动每日0点自动重置免费转发次数的定时任务")
+
+    # 启动定时交易检查任务
+    asyncio.create_task(schedule_transaction_checker())
+    log.info(f"已启动自动检查交易状态的定时任务，间隔 {TRANSACTION_CHECK_INTERVAL} 秒")
 
     # 启动并等待两个客户端断开连接
     await bot_client.run_until_disconnected()  # 运行 BOT_SESSION
@@ -835,7 +1464,7 @@ async def cmd_start(event):
 - 选择"复制链接"
 - 将链接发送给机器人
 
-⚠️ 注意：支持公开频道、公开群组、评论区;私人频道暂不支持(因为需要授权，很多人担心账号安全问题)
+⚠️ 注意：支持频道、群组、评论区;私人频道暂不支持(因为需要授权，很多人担心账号安全问题。另一个办法邀请我进群，然后就能转发了)
 """
     await event.reply(usage_text)
 
@@ -867,21 +1496,114 @@ async def cmd_user(event):
 
 async def cmd_buy(event):
     """处理 /buy 命令，显示充值信息"""
-    buy_text = """💰 购买次数 💰
+    buy_text = """💰 购买转发次数 💰
 
-📦 转发次数套餐：
-  ├ 基础包：25次/1$
-  ├ 标准包：150次/5$
-  └ 高级包：400次/10$
+请选择您想购买的套餐："""
+
+    # 定义套餐按钮
+    buttons = [
+        [Button.inline("基础包: 25次/1$", data=b"buy_basic")],
+        [Button.inline("标准包: 150次/5$", data=b"buy_standard")],
+        [Button.inline("高级包: 400次/10$", data=b"buy_premium")]
+    ]
+
+    await event.respond(buy_text, buttons=buttons)
 
 
-💳 支付方式：
-  ├ 支付宝(暂不支持)
-  └ USDT(TRC20)
+async def cmd_check(event):
+    """处理 /check 命令，查询订单状态"""
+    text = event.text.split()
+    if len(text) < 2:
+        await event.reply("请提供订单号，例如：`/check ORD-12345678`", parse_mode='markdown')
+        return
 
-🔐 购买遇到问题请联系管理员：@YourAdminUsername
+    order_id = text[1]
+    order = get_order_by_id(order_id)
+
+    if order:
+        # 假设order是tuple(order_id, user_id, package_name, amount, quota_amount, status, payment_address, tx_hash, memo, last_checked, created_at, updated_at, completed_at)
+        status = order[5]
+        package_name = order[2]
+        amount = order[3]
+        quota = order[4]
+        created_at = order[7]
+
+        status_text = {
+            "pending": "⏳ 等待付款",
+            "completed": "✅ 已完成",
+            "cancelled": "❌ 已取消"
+        }.get(status, status)
+
+        order_info = f"""📋 订单详情 📋
+        
+🆔 订单号: {order_id}
+📦 套餐: {package_name}
+💰 金额: {amount}$
+🔢 次数: {quota}次
+📅 创建时间: {created_at}
+🔄 状态: {status_text}
+
 """
-    await event.reply(buy_text)
+        if status == "pending":
+            order_info += f"""💳 付款地址: `{USDT_WALLET}`
+
+⚠️ 重要：请务必转账 {amount}$ 的精确金额，系统将通过金额自动匹配您的订单
+✅ 付款成功后系统将自动确认并增加您的次数"""
+
+            buttons = [[Button.inline("刷新状态", data=f"check_{order_id}".encode())]]
+            await event.reply(order_info, buttons=buttons, parse_mode='markdown')
+        elif status == "completed":
+            order_info += "✅ 您的次数已增加，可以通过 /user 查看当前可用次数。"
+            await event.reply(order_info, parse_mode='markdown')
+        elif status == "cancelled":
+            order_info += "⏱️ 此订单已因超时未支付而自动取消。如需继续购买，请重新选择套餐。"
+            await event.reply(order_info, parse_mode='markdown')
+    else:
+        await event.reply("❌ 找不到此订单，请检查订单号是否正确。")
+
+
+async def cmd_admin_confirm(event):
+    """处理 /confirm 命令，管理员确认订单"""
+    # 检查是否为管理员
+    if event.sender_id != ADMIN_ID:
+        await event.reply("⚠️ 此命令仅限管理员使用")
+        return
+
+    text = event.text.split()
+    if len(text) < 2:
+        await event.reply("请提供订单号，例如：`/confirm ORD-12345678`", parse_mode='markdown')
+        return
+
+    order_id = text[1]
+    success = complete_order(order_id)
+
+    if success:
+        # 获取订单信息以便通知用户
+        order = get_order_by_id(order_id)
+        if order:
+            user_id = order[1]
+            package_name = order[2]
+            quota = order[4]
+
+            await event.reply(f"✅ 订单 {order_id} 已确认完成，已为用户 {user_id} 增加 {quota} 次转发次数。")
+
+            # 通知用户订单已完成
+            try:
+                notification = f"""🎉 您的订单已完成 🎉
+
+🆔 订单号: {order_id}
+📦 套餐: {package_name}
+🔢 已增加次数: {quota}次
+
+您可以通过 /user 查看当前可用次数。
+"""
+                await bot_client.send_message(int(user_id), notification)
+            except Exception as e:
+                log.error(f"通知用户订单完成失败: {e}")
+        else:
+            await event.reply(f"✅ 订单 {order_id} 已确认完成，但获取订单详情失败。")
+    else:
+        await event.reply(f"❌ 订单确认失败，请检查订单号是否正确或订单是否已处理。")
 
 
 # 7. 程序入口
