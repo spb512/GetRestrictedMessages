@@ -44,8 +44,19 @@ DB_FILE = "message_forward.db"
 AUTH_USERS = set()
 if AUTHS:
     try:
-        # 解析授权用户字符串，支持整数和 @username
-        AUTH_USERS = set(int(x) if x.isdigit() else x for x in AUTHS.split())
+        # 解析授权用户字符串，支持整数、@username和username
+        AUTH_USERS = set()
+        for x in AUTHS.split():
+            if x.isdigit():
+                AUTH_USERS.add(int(x))
+            else:
+                # 去掉可能存在的@前缀，保存原始格式和无@前缀的格式
+                if x.startswith('@'):
+                    AUTH_USERS.add(x)  # 保留原始格式 @username
+                    AUTH_USERS.add(x[1:])  # 添加无@格式 username
+                else:
+                    AUTH_USERS.add(x)  # 添加原始格式 username
+                    AUTH_USERS.add(f"@{x}")  # 添加带@格式 @username
     except ValueError:
         log.error("AUTHS 配置中包含无效的用户格式，确保是 user_id 或 username")
         exit(1)
@@ -561,11 +572,9 @@ def is_authorized(event: events.NewMessage.Event) -> bool:
     sender = event.sender
     # 获取用户名（可能为 None）
     sender_name = sender.username if sender else None
-    # 调试日志
-    # log.info(f"收到来自用户 {sender_id} 的消息，用户名：{sender_name}")
-    # log.info(f"是否在授权用户列表 (ID)：{sender_id in AUTH_USERS}")
-    # log.info(f"是否在授权用户列表 (用户名)：{sender_name in AUTH_USERS if sender_name else False}")
+
     # 校验 ID 或用户名是否在授权列表中
+    # 由于在配置加载时已经添加了带@和不带@的格式，这里直接检查即可
     return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private
 
 
