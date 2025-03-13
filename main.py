@@ -54,7 +54,7 @@ if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
     exit(1)
 
 
-# 3. 辅助函数与数据库操作
+# 3.数据库操作相关函数
 # 创建并初始化数据库
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -166,7 +166,7 @@ def find_grouped_messages(source_chat_id, grouped_id, target_chat_id):
     return results
 
 
-# 4. 业务逻辑与事件处理函数
+# 4. 辅助函数
 async def message_search(message: Message):
     if message.fwd_from:
         peer_id = utils.get_peer_id(message.fwd_from.from_id)
@@ -447,6 +447,7 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
         await event.reply("服务器内部错误，请过段时间重试")
 
 
+# 5、业务逻辑与事件处理
 # 定义处理新消息的函数
 async def on_new_link(event: events.NewMessage.Event) -> None:
     text = event.text
@@ -550,7 +551,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
                     await user_handle_media_group(event, message, media_group, source_chat_id)
 
 
-# 添加事件处理器
+# 事件处理器
 def is_authorized(event: events.NewMessage.Event) -> bool:
     # 如果未设置 AUTH_USERS，则默认允许所有私聊
     if not AUTH_USERS:
@@ -568,27 +569,31 @@ def is_authorized(event: events.NewMessage.Event) -> bool:
     return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private
 
 
-# 5. 客户端初始化
-log.info("连接机器人。")
-try:
-    # 使用会话字符串初始化Telegram客户端
-    bot_client = TelegramClient(
-        StringSession(BOT_SESSION), api_id=API_ID, api_hash=API_HASH
-    ).start()
-    user_client = TelegramClient(
-        StringSession(USER_SESSION), api_id=API_ID, api_hash=API_HASH
-    ).start()
-except Exception as e:
-    log.exception("启动客户端失败")
-    log.exception(f"Error: {e}")
-    exit(1)
-bot_client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
-
-
 # 6. 主函数定义
 async def main():
     # 初始化数据库
     init_db()
+    #  客户端初始化
+    log.info("连接机器人。")
+    try:
+        # 确保在函数内部可以使用全局变量
+        global bot_client, user_client
+        # 使用会话字符串初始化Telegram客户端
+        bot_client = TelegramClient(
+            StringSession(BOT_SESSION), api_id=API_ID, api_hash=API_HASH
+        )
+        user_client = TelegramClient(
+            StringSession(USER_SESSION), api_id=API_ID, api_hash=API_HASH
+        )
+        # 启动客户端
+        await bot_client.start()
+        await user_client.start()
+    except Exception as e:
+        log.exception("启动客户端失败")
+        log.exception(f"Error: {e}")
+        exit(1)
+    # 注册消息处理器
+    bot_client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
     # 获取机器人的用户信息并开始运行客户端
     ubot_self = await bot_client.get_me()
     log.info("客户端已启动为 %d。", ubot_self.id)
@@ -602,4 +607,4 @@ async def main():
 
 # 7. 程序入口
 if __name__ == '__main__':
-    bot_client.loop.run_until_complete(main())
+    asyncio.run(main())
