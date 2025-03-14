@@ -833,7 +833,7 @@ async def single_forward_message(event, relation):
     if message.media:
         await bot_client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
     else:
-        await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+        await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id, buttons=message.buttons)
 
     # 处理转发次数并发送提示消息
     await process_forward_quota(event)
@@ -963,8 +963,10 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
                                                           caption=message.text, force_document=force_document)
             os.remove(file_path)  # 发送后删除文件
         else:
-            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
-            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
+            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id,
+                                          buttons=message.buttons)
+            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text,
+                                                         buttons=message.buttons)
         # 保存消息关系到数据库
         save_message_relation(
             source_chat_id, message.id,
@@ -1022,8 +1024,10 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
             sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), message.media,
                                                       caption=message.text)
         else:
-            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
-            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
+            await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id,
+                                          buttons=message.buttons)
+            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text,
+                                                         buttons=message.buttons)
         # 保存消息关系到数据库
         save_message_relation(
             source_chat_id, message.id,
@@ -1077,11 +1081,10 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             has_protected_content = channel.get("has_protected_content", False)
             peer_type = channel.get("type", "channel")
             if not has_protected_content:
-                await bot_client.send_message(event.chat_id, "此消息允许转发！无需使用本机器人",
-                                              reply_to=event.message.id)
+                await event.reply("此消息允许转发！无需使用本机器人")
                 return
         else:
-            await bot_client.send_message(event.chat_id, "私人频道和私人群组，暂时不支持", reply_to=event.message.id)
+            await event.reply("私人频道和私人群组，暂时不支持")
             return
     else:
         peer = chat_id
@@ -1092,8 +1095,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             has_protected_content = channel.get("has_protected_content", False)
             peer_type = channel.get("type", "channel")
             if not has_protected_content:
-                await bot_client.send_message(event.chat_id, "此消息允许转发！无需使用本机器人",
-                                              reply_to=event.message.id)
+                await event.reply("此消息允许转发！无需使用本机器人")
                 return
         else:
             await event.reply("服务器内部错误，请联系管理员")
