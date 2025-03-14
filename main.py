@@ -828,7 +828,7 @@ async def get_comment_message(client: TelegramClient, channel, message_id, comme
 async def single_forward_message(event, relation):
     # 如果有记录，直接转发保存的消息
     target_message_id = relation[0]
-    await event.reply("该消息已经转发过，正在重新发送...")
+    # await event.reply("该消息已经转发过，正在重新发送...")
     message = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_message_id)
     if message.media:
         await bot_client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
@@ -840,7 +840,7 @@ async def single_forward_message(event, relation):
 
 
 async def group_forward_message(event, grouped_messages):
-    await event.reply("该消息组已经转发过，正在重新发送...")
+    # await event.reply("该消息组已经转发过，正在重新发送...")
     try:
         target_ids = [target_id for _, target_id in grouped_messages]
         messages = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_ids)
@@ -904,7 +904,7 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
             await user_handle_single_message(event, message, source_chat_id)
     except Exception as e:
         log.exception(f"Error: {e}")
-        await event.reply("服务器内部错误，请过段时间重试")
+        await event.reply("服务器内部错误，请联系管理员")
 
 
 async def user_handle_single_message(event: events.NewMessage.Event, message, source_chat_id) -> None:
@@ -978,7 +978,7 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
         await process_forward_quota(event)
     except Exception as e:
         log.exception(f"Error: {e}")
-        await event.reply("服务器内部错误，请过段时间重试")
+        await event.reply("服务器内部错误，请联系管理员")
 
 
 async def bot_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id) -> None:
@@ -1005,7 +1005,7 @@ async def bot_handle_media_group(event: events.NewMessage.Event, message, media_
             await bot_handle_single_message(event, message, source_chat_id)
     except Exception as e:
         log.exception(f"Error: {e}")
-        await event.reply("服务器内部错误，请过段时间重试")
+        await event.reply("服务器内部错误，请联系管理员")
 
 
 async def bot_handle_single_message(event: events.NewMessage.Event, message, source_chat_id) -> None:
@@ -1035,7 +1035,7 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
         await process_forward_quota(event)
     except Exception as e:
         log.exception(f"Error: {e}")
-        await event.reply("服务器内部错误，请过段时间重试")
+        await event.reply("服务器内部错误，请联系管理员")
 
 
 # 5、业务逻辑与事件处理
@@ -1071,26 +1071,41 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     if chat_id.isdigit():
         peer = PeerChannel(int(chat_id))
         req_params = {"chat_id": utils.get_peer_id(peer)}
+        result = requests.get(url, params=req_params)
+        if result and result.json().get("ok"):
+            channel = result.json().get("result")
+            has_protected_content = channel.get("has_protected_content", False)
+            peer_type = channel.get("type", "channel")
+            if not has_protected_content:
+                await bot_client.send_message(event.chat_id, "此消息允许转发！无需使用本机器人",
+                                              reply_to=event.message.id)
+                return
+        else:
+            await bot_client.send_message(event.chat_id, "私人频道和私人群组，暂时不支持", reply_to=event.message.id)
+            return
     else:
         peer = chat_id
         req_params = {"chat_id": f"@{chat_id}"}
-    result = requests.get(url, params=req_params)
-    has_protected_content = False
-    peer_type = "channel"
-    if result and result.json().get("ok"):
-        channel = result.json().get("result")
-        has_protected_content = channel.get("has_protected_content", False)
-        peer_type = channel.get("type", "channel")
-    if not has_protected_content:
-        await bot_client.send_message(event.chat_id, "此消息允许转发！无需使用本机器人", reply_to=event.message.id)
-        return
+        result = requests.get(url, params=req_params)
+        if result and result.json().get("ok"):
+            channel = result.json().get("result")
+            has_protected_content = channel.get("has_protected_content", False)
+            peer_type = channel.get("type", "channel")
+            if not has_protected_content:
+                await bot_client.send_message(event.chat_id, "此消息允许转发！无需使用本机器人",
+                                              reply_to=event.message.id)
+                return
+        else:
+            await event.reply("服务器内部错误，请联系管理员")
+            return
+
     if peer_type == "channel":  # 频道消息处理
         try:
             # 获取指定聊天中的消息
             message = await bot_client.get_messages(peer, ids=message_id)
         except Exception as e:
             log.exception(f"Error: {e}")
-            await event.reply("服务器内部错误，请过段时间重试")
+            await event.reply("服务器内部错误，请联系管理员")
             return
         if not message:
             await event.reply("找不到聊天记录！要么无效，要么先以此帐户加入！")
@@ -1107,7 +1122,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             message = await user_client.get_messages(peer, ids=message_id)
         except Exception as e:
             log.exception(f"Error: {e}")
-            await event.reply("服务器内部错误，请过段时间重试")
+            await event.reply("服务器内部错误，请联系管理员")
             return
         if not message:
             await event.reply("找不到聊天记录！要么无效，要么先以此帐户加入！")
@@ -1138,7 +1153,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             if result:  # 有结果替换为频道消息
                 peer, message_id = result
                 message = await bot_client.get_messages(peer, ids=message_id)
-                await event.reply("替换频道消息，免下载转发")
+                # await event.reply("替换频道消息，免下载转发")
                 if is_single:
                     await bot_handle_single_message(event, message, source_chat_id)
                 else:
