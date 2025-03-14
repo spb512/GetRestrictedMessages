@@ -1483,50 +1483,6 @@ async def cmd_check(event):
         await event.reply("❌ 找不到此订单，请检查订单号是否正确。")
 
 
-async def cmd_admin_confirm(event):
-    """处理 /confirm 命令，管理员确认订单"""
-    # 检查是否为管理员
-    if event.sender_id != ADMIN_ID:
-        await event.reply("⚠️ 此命令仅限管理员使用")
-        return
-
-    text = event.text.split()
-    if len(text) < 2:
-        await event.reply("请提供订单号，例如：`/confirm ORD-12345678`", parse_mode='markdown')
-        return
-
-    order_id = text[1]
-    success = complete_order(order_id)
-
-    if success:
-        # 获取订单信息以便通知用户
-        order = get_order_by_id(order_id)
-        if order:
-            user_id = order[1]
-            package_name = order[2]
-            quota = order[4]
-
-            await event.reply(f"✅ 订单 {order_id} 已确认完成，已为用户 {user_id} 增加 {quota} 次转发次数。")
-
-            # 通知用户订单已完成
-            try:
-                notification = f"""🎉 您的订单已完成 🎉
-
-🆔 订单号: {order_id}
-📦 套餐: {package_name}
-🔢 已增加次数: {quota}次
-
-您可以通过 /user 查看当前可用次数。
-"""
-                await bot_client.send_message(int(user_id), notification)
-            except Exception as e:
-                log.error(f"通知用户订单完成失败: {e}")
-        else:
-            await event.reply(f"✅ 订单 {order_id} 已确认完成，但获取订单详情失败。")
-    else:
-        await event.reply(f"❌ 订单确认失败，请检查订单号是否正确或订单是否已处理。")
-
-
 # 6. 主函数定义
 async def main():
     # 初始化数据库
@@ -1562,7 +1518,6 @@ async def main():
     bot_client.add_event_handler(cmd_user, events.NewMessage(pattern='/user', func=is_authorized))
     bot_client.add_event_handler(cmd_buy, events.NewMessage(pattern='/buy', func=is_authorized))
     bot_client.add_event_handler(cmd_check, events.NewMessage(pattern='/check', func=is_authorized))
-    bot_client.add_event_handler(cmd_admin_confirm, events.NewMessage(pattern='/confirm'))
 
     # 注册回调处理器
     bot_client.add_event_handler(callback_handler, events.CallbackQuery())
