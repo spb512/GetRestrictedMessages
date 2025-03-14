@@ -1209,7 +1209,7 @@ async def callback_handler(event):
         if order_id:
             # 生成付款信息
             payment_text = f"""🛒 您已选择: {package['name']}
-💰 价格: {unique_amount}$  (请务必转账此精确金额)
+💰 价格: {unique_amount}$  (请务必转账此精确到账金额)
 🔢 可获得次数: {package['quota']}次
 
 💳 请使用USDT(TRC20)支付至以下地址:
@@ -1217,7 +1217,7 @@ async def callback_handler(event):
 
 📝 订单号: `{order_id}`
 
-⚠️ 重要：请务必转账 {unique_amount}$ 的精确金额，系统将通过金额自动匹配您的订单
+⚠️ 重要：请务必转账 {unique_amount}$ 的精确(小数点后要一致)到账金额，系统将通过金额自动匹配您的订单
 ✅ 付款成功后系统将自动确认并增加您的次数"""
             # 添加查看订单状态的按钮
             buttons = [
@@ -1402,7 +1402,7 @@ async def cmd_start(event):
 - 选择"复制链接"
 - 将链接发送给机器人
 
-⚠️ 注意：支持频道、群组、评论区;私人频道暂不支持(因为需要授权，很多人担心账号安全问题。另一个办法邀请我进群，然后就能转发了)
+⚠️ 范围：支持频道、群组、评论区。⚠️注意：私人频道暂不支持(因为需要授权登录，很多人担心账号安全问题。)
 """
     await event.reply(usage_text)
 
