@@ -749,28 +749,22 @@ async def process_forward_quota(event):
 
 
 # 4. 辅助函数
-async def message_search(message: Message):
+async def replace_message(message: Message):
     if message.fwd_from:
         peer_id = utils.get_peer_id(message.fwd_from.from_id)
         message_id = message.fwd_from.channel_post
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
         req_params = {"chat_id": peer_id}
         result = requests.get(url, params=req_params)
-        has_protected_content = False
         peer_type = "channel"
         channel_username = None
         if result and result.json().get("ok"):
             channel = result.json().get("result")
-            has_protected_content = channel.get("has_protected_content", False)
             peer_type = channel.get("type", "channel")
             channel_username = channel.get("username")
-
         if peer_type == "channel" and channel_username:
             return channel_username, message_id
-        else:
-            temp_message = await user_client.get_messages(message.fwd_from.from_id, ids=message_id)
-            return await message_search(temp_message)  # 确保返回递归结果
-    return None  # 如果没有满足条件，返回 None
+    return None
 
 
 async def parse_url(text: str):
@@ -1140,10 +1134,11 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
                 comment_media_group.reverse()
                 await user_handle_media_group(event, comment_message, comment_media_group, source_chat_id)
         else:
-            result = await message_search(message)
+            result = await replace_message(message)
             if result:  # 有结果替换为频道消息
                 peer, message_id = result
                 message = await bot_client.get_messages(peer, ids=message_id)
+                await event.reply("替换频道消息，免下载转发")
                 if is_single:
                     await bot_handle_single_message(event, message, source_chat_id)
                 else:
