@@ -831,9 +831,9 @@ async def single_forward_message(event, relation):
     await event.reply("该消息已经转发过，正在重新发送...")
     message = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_message_id)
     if message.media:
-        await bot_client.send_file(event.chat_id, message.media, caption=message[0].text, reply_to=event.message.id)
+        await bot_client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
     else:
-        await bot_client.send_message(event.chat_id, message[0].text, reply_to=event.message.id)
+        await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
 
     # 处理转发次数并发送提示消息
     await process_forward_quota(event)
