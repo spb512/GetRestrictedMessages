@@ -78,9 +78,8 @@ if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
     log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、BOT_SESSION、USER_SESSION")
     exit(1)
 
-# 全局定义客户端对象
-bot_client = None
-user_client = None
+bot_client = TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH, proxy=('socks5', '127.0.0.1', 10808))
+user_client = TelegramClient(StringSession(USER_SESSION), API_ID, API_HASH, proxy=('socks5', '127.0.0.1', 10808))
 
 
 # 3.数据库操作相关函数
@@ -547,7 +546,7 @@ def cancel_expired_order(order_id):
 async def schedule_transaction_checker():
     """定时任务：定期检查待处理订单的交易状态和超时情况"""
     # 支付超时时间（秒）
-    PAYMENT_TIMEOUT = 20 * 60  # 20分钟
+    payment_timeout = 20 * 60  # 20分钟
 
     while True:
         try:
@@ -565,7 +564,7 @@ async def schedule_transaction_checker():
 
                     # 检查订单是否超时
                     time_elapsed = (now - created_at).total_seconds()
-                    if time_elapsed > PAYMENT_TIMEOUT:
+                    if time_elapsed > payment_timeout:
                         # 订单已超时，取消订单
                         cancelled = cancel_expired_order(order_id)
                         if cancelled:
@@ -838,9 +837,9 @@ async def single_forward_message(event, relation):
     await event.reply("该消息已经转发过，正在重新发送...")
     message = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_message_id)
     if message.media:
-        await bot_client.send_file(event.chat_id, message.media, caption=message.text, reply_to=event.message.id)
+        await bot_client.send_file(event.chat_id, message.media, caption=message[0].text, reply_to=event.message.id)
     else:
-        await bot_client.send_message(event.chat_id, message.text, reply_to=event.message.id)
+        await bot_client.send_message(event.chat_id, message[0].text, reply_to=event.message.id)
 
     # 处理转发次数并发送提示消息
     await process_forward_quota(event)
@@ -892,8 +891,7 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
                 return
             # 发送提示消息
             status_message = await event.reply("转存中，请稍等...")
-            # 收集所有文本作为 caption
-            captions = [msg.text if msg.text is not None else '' for msg in media_group]
+            captions = media_group[0].text
             # 构造相册的文件对象
             album_files = await asyncio.gather(*[prepare_album_file(msg) for msg in media_group if msg.media])
             await bot_client.send_file(event.chat_id, file=album_files, caption=captions, reply_to=event.message.id)
@@ -906,7 +904,6 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
             )
             # 删除提示消息
             await status_message.delete()
-
             # 处理转发次数并发送提示消息
             await process_forward_quota(event)
         else:
@@ -1379,77 +1376,6 @@ async def callback_handler(event):
         await event.answer("未知操作", alert=True)
 
 
-# 6. 主函数定义
-async def main():
-    # 初始化数据库
-    init_db()
-    #  客户端初始化
-    log.info("连接机器人。")
-    try:
-        # 确保在函数内部可以使用全局变量
-        global bot_client, user_client
-        # 使用会话字符串初始化Telegram客户端
-        bot_client = TelegramClient(
-            StringSession(BOT_SESSION), api_id=API_ID, api_hash=API_HASH, proxy=('socks5', '127.0.0.1', 10808)
-        )
-        user_client = TelegramClient(
-            StringSession(USER_SESSION), api_id=API_ID, api_hash=API_HASH, proxy=('socks5', '127.0.0.1', 10808)
-        )
-        # 启动客户端
-        await bot_client.start()
-        await user_client.start()
-
-        # 设置机器人命令菜单
-        commands = [
-            BotCommand(command="start", description="使用方法"),
-            BotCommand(command="user", description="用户中心"),
-            BotCommand(command="buy", description="购买次数"),
-            BotCommand(command="check", description="查询订单")
-        ]
-        await bot_client(SetBotCommandsRequest(
-            scope=BotCommandScopeDefault(),
-            lang_code="",
-            commands=commands
-        ))
-
-    except Exception as e:
-        log.exception("启动客户端失败")
-        log.exception(f"Error: {e}")
-        exit(1)
-
-    # 注册消息处理器
-    bot_client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
-
-    # 注册命令处理器
-    bot_client.add_event_handler(cmd_start, events.NewMessage(pattern='/start', func=is_authorized))
-    bot_client.add_event_handler(cmd_user, events.NewMessage(pattern='/user', func=is_authorized))
-    bot_client.add_event_handler(cmd_buy, events.NewMessage(pattern='/buy', func=is_authorized))
-    bot_client.add_event_handler(cmd_check, events.NewMessage(pattern='/check', func=is_authorized))
-    bot_client.add_event_handler(cmd_admin_confirm, events.NewMessage(pattern='/confirm'))
-
-    # 注册回调处理器
-    bot_client.add_event_handler(callback_handler, events.CallbackQuery())
-
-    # 获取机器人的用户信息并开始运行客户端
-    ubot_self = await bot_client.get_me()
-    log.info("客户端已启动为 %d。", ubot_self.id)
-    # 获取 user_client 的用户信息并启动
-    u_user = await user_client.get_me()
-    log.info("USER_SESSION 已启动为 %d。", u_user.id)
-
-    # 启动定时重置任务
-    asyncio.create_task(schedule_quota_reset())
-    log.info("已启动每日0点自动重置免费转发次数的定时任务")
-
-    # 启动定时交易检查任务
-    asyncio.create_task(schedule_transaction_checker())
-    log.info(f"已启动自动检查交易状态的定时任务，间隔 {TRANSACTION_CHECK_INTERVAL} 秒")
-
-    # 启动并等待两个客户端断开连接
-    await bot_client.run_until_disconnected()  # 运行 BOT_SESSION
-    await user_client.run_until_disconnected()  # 运行 USER_SESSION
-
-
 # 命令处理函数
 async def cmd_start(event):
     """处理 /start 命令，显示使用方法说明"""
@@ -1604,6 +1530,66 @@ async def cmd_admin_confirm(event):
             await event.reply(f"✅ 订单 {order_id} 已确认完成，但获取订单详情失败。")
     else:
         await event.reply(f"❌ 订单确认失败，请检查订单号是否正确或订单是否已处理。")
+
+
+# 6. 主函数定义
+async def main():
+    # 初始化数据库
+    init_db()
+    # 客户端初始化
+    log.info("连接机器人。")
+    await bot_client.connect()
+    await user_client.connect()
+    try:
+        # 设置机器人命令菜单
+        commands = [
+            BotCommand(command="start", description="使用方法"),
+            BotCommand(command="user", description="用户中心"),
+            BotCommand(command="buy", description="购买次数"),
+            BotCommand(command="check", description="查询订单")
+        ]
+        await bot_client(SetBotCommandsRequest(
+            scope=BotCommandScopeDefault(),
+            lang_code="",
+            commands=commands
+        ))
+
+    except Exception as e:
+        log.exception("启动客户端失败")
+        log.exception(f"Error: {e}")
+        exit(1)
+
+    # 注册消息处理器
+    bot_client.add_event_handler(on_new_link, events.NewMessage(func=is_authorized))
+
+    # 注册命令处理器
+    bot_client.add_event_handler(cmd_start, events.NewMessage(pattern='/start', func=is_authorized))
+    bot_client.add_event_handler(cmd_user, events.NewMessage(pattern='/user', func=is_authorized))
+    bot_client.add_event_handler(cmd_buy, events.NewMessage(pattern='/buy', func=is_authorized))
+    bot_client.add_event_handler(cmd_check, events.NewMessage(pattern='/check', func=is_authorized))
+    bot_client.add_event_handler(cmd_admin_confirm, events.NewMessage(pattern='/confirm'))
+
+    # 注册回调处理器
+    bot_client.add_event_handler(callback_handler, events.CallbackQuery())
+
+    # 获取机器人的用户信息并开始运行客户端
+    ubot_self = await bot_client.get_me()
+    log.info("客户端已启动为 %d。", ubot_self.id)
+    # 获取 user_client 的用户信息并启动
+    u_user = await user_client.get_me()
+    log.info("USER_SESSION 已启动为 %d。", u_user.id)
+
+    # 启动定时重置任务
+    asyncio.create_task(schedule_quota_reset())
+    log.info("已启动每日0点自动重置免费转发次数的定时任务")
+
+    # 启动定时交易检查任务
+    asyncio.create_task(schedule_transaction_checker())
+    log.info(f"已启动自动检查交易状态的定时任务，间隔 {TRANSACTION_CHECK_INTERVAL} 秒")
+
+    # 启动并等待两个客户端断开连接
+    await bot_client.run_until_disconnected()  # 运行 BOT_SESSION
+    await user_client.run_until_disconnected()  # 运行 USER_SESSION
 
 
 # 7. 程序入口
