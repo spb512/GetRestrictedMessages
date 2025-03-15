@@ -29,7 +29,7 @@ log.info("连接机器人。")
 try:
     # 使用会话字符串初始化Telegram客户端
     client = TelegramClient(
-        StringSession(SESSION), api_id=API_ID, api_hash=API_HASH
+        StringSession(SESSION), api_id=API_ID, api_hash=API_HASH, proxy = ('socks5', '127.0.0.1', 10808)
     ).start()
 except Exception as e:
     log.exception("启动客户端失败")

@@ -34,7 +34,7 @@ log.info("连接机器人。")
 try:
     # 使用会话字符串初始化Telegram客户端
     client = TelegramClient(
-        StringSession(SESSION), api_id=API_ID, api_hash=API_HASH
+        StringSession(SESSION), api_id=API_ID, api_hash=API_HASH, proxy=('socks5', '127.0.0.1', 10808)
     ).start()
 except Exception as e:
     log.exception("启动客户端失败")
@@ -172,7 +172,8 @@ async def handle_single_message(event: events.NewMessage.Event, message) -> None
                                        attributes=message.media.document.attributes,
                                        force_document=force_document)
             else:
-                await client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
+                await client.send_file(event.chat_id, file_path, caption=message.text, nosound_video=True,
+                                       reply_to=event.message.id,
                                        force_document=force_document)
             os.remove(file_path)  # 发送后删除文件
         else:
@@ -232,6 +233,7 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
                     thumb=await client.upload_file(thumb_path) if thumb_path else None,
                     mime_type=msg.media.document.mime_type or "application/octet-stream",
                     attributes=msg.media.document.attributes,
+                    nosound_video=True
                 )
         finally:
             # 删除临时文件
