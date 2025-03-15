@@ -55,11 +55,11 @@ RANGE = 10
 # SQLite 数据库文件
 DB_FILE = "message_forward.db"
 # 附加信息
-addInfo = "\n\n♋91转发|机器人👉：@91_zf_bot\n♍[91转发|聊天👉：](https://example.com)@91_zf_group\n🔯[91转发|通知👉：@91_zf_channel](https://t.me/joinchat/XXXXXX)"
+addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\n♍[91转发|聊天👉：](https://t.me/91_zf_bot)@91_zf_group\n🔯[91转发|通知👉：](https://t.me/91_zf_channel)@91_zf_channel"
 # 按钮
-buttons = [
-    [Button.url("91转发|聊天", "https://example.com"), Button.url("91转发|通知", "https://t.me/joinchat/XXXXXX")],
-]
+# buttons = [
+#     [Button.url("91转发|聊天", "https://example.com"), Button.url("91转发|通知", "https://t.me/joinchat/XXXXXX")]
+# ]
 
 # 在配置加载时解析授权用户列表
 AUTH_USERS = set()
@@ -839,10 +839,9 @@ async def single_forward_message(event, relation):
     message = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_message_id)
     if message.media:
         await bot_client.send_file(event.chat_id, message.media, caption=message.text + addInfo,
-                                   reply_to=event.message.id, buttons=message.buttons + buttons)
+                                   reply_to=event.message.id)
     else:
-        await bot_client.send_message(event.chat_id, message.text + addInfo, reply_to=event.message.id,
-                                      buttons=message.buttons + buttons)
+        await bot_client.send_message(event.chat_id, message.text + addInfo, reply_to=event.message.id)
 
     # 处理转发次数并发送提示消息
     await process_forward_quota(event)
@@ -900,7 +899,7 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
             await bot_client.send_file(event.chat_id, file=album_files, caption=captions + addInfo,
                                        reply_to=event.message.id)
             sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file=album_files,
-                                                       caption=captions + addInfo)
+                                                       caption=captions)
             # 保存媒体组消息关系到数据库
             save_media_group_relations(
                 source_chat_id, media_group,
@@ -953,37 +952,32 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
                 await bot_client.send_file(event.chat_id, file_path, caption=message.text + addInfo,
                                            reply_to=event.message.id,
                                            attributes=message.media.document.attributes, thumb=thumb_path,
-                                           force_document=force_document, buttons=message.buttons + buttons)
+                                           force_document=force_document)
                 sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
-                                                          caption=message.text + addInfo,
+                                                          caption=message.text,
                                                           attributes=message.media.document.attributes,
                                                           thumb=thumb_path,
-                                                          force_document=force_document,
-                                                          buttons=message.buttons + buttons)
+                                                          force_document=force_document)
                 os.remove(thumb_path)  # 发送后删除缩略图
             elif isinstance(message.media, MessageMediaDocument) and message.media.document.mime_type == 'audio/mpeg':
                 await bot_client.send_file(event.chat_id, file_path, caption=message.text + addInfo,
                                            reply_to=event.message.id,
                                            attributes=message.media.document.attributes,
-                                           force_document=force_document, buttons=message.buttons + buttons)
+                                           force_document=force_document)
                 sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
-                                                          caption=message.text + addInfo,
+                                                          caption=message.text,
                                                           attributes=message.media.document.attributes,
-                                                          force_document=force_document,
-                                                          buttons=message.buttons + buttons)
+                                                          force_document=force_document)
             else:
                 await bot_client.send_file(event.chat_id, file_path, caption=message.text + addInfo,
                                            reply_to=event.message.id,
-                                           force_document=force_document, buttons=message.buttons + buttons)
+                                           force_document=force_document)
                 sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
-                                                          caption=message.text + addInfo, force_document=force_document,
-                                                          buttons=message.buttons + buttons)
+                                                          caption=message.text, force_document=force_document)
             os.remove(file_path)  # 发送后删除文件
         else:
-            await bot_client.send_message(event.chat_id, message.text + addInfo, reply_to=event.message.id,
-                                          buttons=message.buttons + buttons)
-            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text + addInfo,
-                                                         buttons=message.buttons + buttons)
+            await bot_client.send_message(event.chat_id, message.text + addInfo, reply_to=event.message.id)
+            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
         # 保存消息关系到数据库
         save_message_relation(
             source_chat_id, message.id,
@@ -1012,7 +1006,7 @@ async def bot_handle_media_group(event: events.NewMessage.Event, message, media_
             caption = media_group[0].text
             await bot_client.send_file(event.chat_id, media_files, caption=caption + addInfo, reply_to=event.message.id)
             sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), media_files,
-                                                       caption=caption + addInfo)
+                                                       caption=caption)
             # 保存媒体组消息关系到数据库
             save_media_group_relations(
                 source_chat_id, media_group,
@@ -1039,14 +1033,12 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
             return
         if message.media:
             await bot_client.send_file(event.chat_id, message.media, caption=message.text + addInfo,
-                                       reply_to=event.message.id, buttons=message.buttons + buttons)
+                                       reply_to=event.message.id)
             sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), message.media,
-                                                      caption=message.text + addInfo, buttons=message.buttons + buttons)
+                                                      caption=message.text)
         else:
-            await bot_client.send_message(event.chat_id, message.text + addInfo, reply_to=event.message.id,
-                                          buttons=message.buttons + buttons)
-            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text + addInfo,
-                                                         buttons=message.buttons + buttons)
+            await bot_client.send_message(event.chat_id, message.text + addInfo, reply_to=event.message.id)
+            sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text)
         # 保存消息关系到数据库
         save_message_relation(
             source_chat_id, message.id,
@@ -1273,7 +1265,7 @@ async def callback_handler(event):
             package_name = order[2]
             amount = order[3]
             quota = order[4]
-            created_at = order[7]
+            created_at = order[10]
 
             status_text = {
                 "pending": "⏳ 等待付款",
