@@ -9,10 +9,12 @@ import os
 import random
 import sqlite3
 import tempfile
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta
 
+import psutil
 import requests
 from decouple import config
 from telethon import TelegramClient, events, utils
@@ -62,6 +64,13 @@ addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\
 #     [Button.url("91转发|聊天", "https://example.com"), Button.url("91转发|通知", "https://t.me/joinchat/XXXXXX")]
 # ]
 
+# 添加全局变量
+SYSTEM_OVERLOADED = False
+CPU_THRESHOLD = 80  # CPU使用率阈值（百分比）
+MEMORY_THRESHOLD = 80  # 内存使用率阈值（百分比）
+DISK_IO_THRESHOLD = 80  # 磁盘I/O使用率阈值（百分比）
+MONITOR_INTERVAL = 5  # 监控间隔（秒）
+
 # 在配置加载时解析授权用户列表
 AUTH_USERS = set()
 if AUTHS:
@@ -88,6 +97,52 @@ if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
 
 bot_client = TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH, proxy=('socks5', '127.0.0.1', 10808))
 user_client = TelegramClient(StringSession(USER_SESSION), API_ID, API_HASH, proxy=('socks5', '127.0.0.1', 10808))
+
+
+# 添加系统监控函数
+def monitor_system_resources():
+    """监控系统资源使用情况，并在超过阈值时设置系统过载标志"""
+    global SYSTEM_OVERLOADED
+
+    while True:
+        try:
+            # 获取CPU使用率
+            cpu_percent = psutil.cpu_percent(interval=1)
+
+            # 获取内存使用率
+            memory_percent = psutil.virtual_memory().percent
+
+            # 获取磁盘I/O使用率
+            disk_io = psutil.disk_io_counters()
+            time.sleep(0.1)
+            disk_io_new = psutil.disk_io_counters()
+            disk_io_percent = 0
+            if hasattr(disk_io, 'read_bytes') and hasattr(disk_io_new, 'read_bytes'):
+                read_diff = disk_io_new.read_bytes - disk_io.read_bytes
+                write_diff = disk_io_new.write_bytes - disk_io.write_bytes
+                # 简单估算I/O使用率，实际应根据系统磁盘性能调整基准值
+                disk_io_percent = min(100.0, (read_diff + write_diff) / (10 * 1024 * 1024) * 100)
+
+            # 记录资源使用情况
+            # log.info(f"系统资源监控 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
+
+            # 检查是否超过阈值
+            if cpu_percent > CPU_THRESHOLD or memory_percent > MEMORY_THRESHOLD or disk_io_percent > DISK_IO_THRESHOLD:
+                if not SYSTEM_OVERLOADED:
+                    SYSTEM_OVERLOADED = True
+                    log.warning(
+                        f"系统负载过高 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
+            else:
+                if SYSTEM_OVERLOADED:
+                    SYSTEM_OVERLOADED = False
+                    log.info(
+                        f"系统负载恢复正常 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
+
+            # 等待下一次监控
+            time.sleep(MONITOR_INTERVAL)
+        except Exception as e:
+            log.exception(f"系统监控异常: {e}")
+            time.sleep(MONITOR_INTERVAL)
 
 
 # 3.数据库操作相关函数
@@ -1069,6 +1124,11 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
 # 5、业务逻辑与事件处理
 # 定义处理新消息的函数
 async def on_new_link(event: events.NewMessage.Event) -> None:
+    # 检查系统负载
+    if SYSTEM_OVERLOADED:
+        await event.reply("系统当前负载较高，请稍后再试...")
+        return
+
     text = event.text
     if not text:
         return
@@ -1574,6 +1634,10 @@ async def cmd_check(event):
 async def main():
     # 初始化数据库
     init_db()
+    # 启动系统资源监控线程
+    monitor_thread = threading.Thread(target=monitor_system_resources, daemon=True)
+    monitor_thread.start()
+    log.info("已启动系统资源监控线程")
     # 客户端初始化
     log.info("连接机器人。")
     await bot_client.connect()
