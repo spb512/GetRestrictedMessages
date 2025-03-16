@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 import requests
 from decouple import config
 from telethon import TelegramClient, events, utils
+from telethon.errors import ChannelPrivateError
 from telethon.sessions import StringSession
 from telethon.tl.custom import Button
 from telethon.tl.functions.bots import SetBotCommandsRequest
@@ -1104,12 +1105,18 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         try:
             # 获取指定聊天中的消息
             message = await user_client.get_messages(peer, ids=message_id)
-        except Exception as e:
-            log.exception(f"Error: {e}")
+        except ValueError as e:
             if is_thread:
                 await event.reply("请先发送频道里任意一条消息的链接，再发送评论区消息的链接")
             else:
                 await event.reply("私人频道/私人群组，请先邀请中转用户 @gsix618 进群。")
+            return
+        except ChannelPrivateError as e:
+            await event.reply("此群组/频道无法访问，或你已被拉黑(踢了)")
+            return
+        except Exception as e:
+            log.exception(f"Error: {e}")
+            await event.reply("服务器内部错误，请联系管理员")
             return
         entity = await user_client.get_entity(peer)
         if isinstance(entity, Channel) and not entity.megagroup:  # 频道
