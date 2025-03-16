@@ -42,7 +42,7 @@ BOT_TOKEN = config("BOT_TOKEN", default=None)
 PRIVATE_CHAT_ID = config("PRIVATE_CHAT_ID", default=None, cast=int)
 AUTHS = config("AUTHS", default="")
 # USDT(TRC20)钱包地址 - 用于接收付款
-USDT_WALLET = config("USDT_WALLET", default="TRxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+USDT_WALLET = config("USDT_WALLET", default="TM9tn28zug456sMkd5AZp9cDCRMFxrH7EG")
 # TRONGRID API 密钥 - 用于查询交易
 TRONGRID_API_KEY = config("TRONGRID_API_KEY", default="")
 # TRC20 USDT 合约地址
