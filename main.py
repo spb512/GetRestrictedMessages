@@ -19,7 +19,7 @@ from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
 from telethon.tl.custom import Button
 from telethon.tl.functions.bots import SetBotCommandsRequest
-from telethon.tl.types import BotCommand, BotCommandScopeDefault
+from telethon.tl.types import BotCommand, BotCommandScopeDefault, Channel
 from telethon.tl.types import MessageMediaDocument, PeerChannel, Message, MessageMediaPhoto, InputMediaUploadedPhoto, \
     InputMediaUploadedDocument
 
@@ -1083,13 +1083,53 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         return
     source_chat_id = chat_id
     is_single = 'single' in text
-    is_comment = 'comment' in params
     is_digit = chat_id.isdigit()
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
     if is_digit:  # 私有频道和私有群组
-        await event.reply("私有频道和私有群组，暂不开放")
-        return
+        peer = PeerChannel(int(chat_id))
+        is_thread = 'thread' in params
+        try:
+            # 获取指定聊天中的消息
+            message = await user_client.get_messages(peer, ids=message_id)
+        except Exception as e:
+            log.exception(f"Error: {e}")
+            if is_thread:
+                await event.reply("请先发送频道里任意一条消息的链接，再发送评论区消息的链接")
+            else:
+                await event.reply("私人频道/私人群组，请先邀请中转用户@gsix618进群。")
+            return
+        entity = await user_client.get_entity(peer)
+        if isinstance(entity, Channel) and not entity.megagroup:  # 频道
+            if is_single:
+                await user_handle_single_message(event, message, source_chat_id)
+            else:
+                media_group = await get_media_group_messages(message, message_id, peer, user_client)
+                await user_handle_media_group(event, message, media_group, source_chat_id)
+        else:
+            if is_thread:  # 评论消息
+                if is_single:
+                    await user_handle_single_message(event, message, source_chat_id)
+                else:
+                    media_group = await get_media_group_messages(message, message_id, peer, user_client)
+                    await user_handle_media_group(event, message, media_group, source_chat_id)
+            else:
+                result = await replace_message(message)
+                if result:
+                    peer, message_id = result
+                    message = await bot_client.get_messages(peer, ids=message_id)
+                    if is_single:
+                        await bot_handle_single_message(event, message, source_chat_id)
+                    else:
+                        media_group = await get_media_group_messages(message, message_id, peer, bot_client)
+                        await bot_handle_media_group(event, message, media_group, source_chat_id)
+                else:
+                    if is_single:
+                        await user_handle_single_message(event, message, source_chat_id)
+                    else:
+                        media_group = await get_media_group_messages(message, message_id, peer, user_client)
+                        await user_handle_media_group(event, message, media_group, source_chat_id)
+
     else:  # 公开频道和公开群组
         peer = chat_id
         req_params = {"chat_id": f"@{chat_id}"}
@@ -1110,6 +1150,7 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
                 log.exception(f"Error: {e}")
                 await event.reply("服务器内部错误，请联系管理员")
                 return
+            is_comment = 'comment' in params
             if is_comment:
                 comment_id = int(params.get('comment'))
                 # 获取频道实体
@@ -1119,11 +1160,9 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
                 )
                 # 1、有评论-单个
                 if is_single:
-                    await event.reply("有评论-单个")
                     await user_handle_single_message(event, comment_message, source_chat_id)
                 # 2、有评论-多个
                 else:
-                    await event.reply("有评论-多个")
                     # 获取属于同一组的所有消息
                     comment_media_group = []
                     async for reply in user_client.iter_messages(
@@ -1141,11 +1180,9 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
                     return
                 # 3、无评论-单个
                 if is_single:
-                    await event.reply("无评论-单个")
                     await bot_handle_single_message(event, message, source_chat_id)
                 # 4、无评论-多个
                 else:
-                    await event.reply("无评论-多个")
                     media_group = await get_media_group_messages(message, message_id, peer, bot_client)
                     await bot_handle_media_group(event, message, media_group, source_chat_id)
         else:  # 公开群组
@@ -1166,21 +1203,17 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
                 # await event.reply("替换频道消息，免下载转发")
                 # 5、有替代-单个
                 if is_single:
-                    await event.reply("有替代-单个")
                     await bot_handle_single_message(event, message, source_chat_id)
                 # 6、有替代-多个
                 else:
-                    await event.reply("有替代-多个")
                     media_group = await get_media_group_messages(message, message_id, peer, bot_client)
                     await bot_handle_media_group(event, message, media_group, source_chat_id)
             else:
                 # 7、无替代-单个
                 if is_single:
-                    await event.reply("无替代-单个")
                     await user_handle_single_message(event, message, source_chat_id)
                 # 8、无替代-多个
                 else:
-                    await event.reply("无替代-多个")
                     media_group = await get_media_group_messages(message, message_id, peer, user_client)
                     await user_handle_media_group(event, message, media_group, source_chat_id)
 
