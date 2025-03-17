@@ -196,9 +196,122 @@ def init_db():
     )
     ''')
 
+    # 创建邀请关系表
+    cursor.execute('DROP TABLE IF EXISTS invite_relations')
+    cursor.execute('''
+    CREATE TABLE invite_relations (
+        inviter_id TEXT NOT NULL,
+        invitee_id TEXT,
+        invite_code TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (invitee_id)
+    )
+    ''')
+
     conn.commit()
     conn.close()
     log.info("数据库初始化完成")
+
+
+def generate_invite_code():
+    """生成唯一的邀请码"""
+    import uuid
+    return str(uuid.uuid4())[:8].upper()
+
+
+def get_user_invite_code(user_id):
+    """获取用户的邀请码"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # 检查用户是否已有邀请码
+    cursor.execute('SELECT invite_code FROM invite_relations WHERE inviter_id = ?', (str(user_id),))
+    result = cursor.fetchone()
+
+    if not result:
+        # 生成新的邀请码
+        invite_code = generate_invite_code()
+        cursor.execute('''
+        INSERT INTO invite_relations (inviter_id, invite_code, invitee_id)
+        VALUES (?, ?, NULL)
+        ''', (str(user_id), invite_code))
+        conn.commit()
+        conn.close()
+        return invite_code
+
+    conn.close()
+    return result[0]
+
+
+def process_invite(invite_code, invitee_id):
+    """处理邀请关系并发放奖励"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    try:
+        # 检查邀请码是否有效
+        cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
+        result = cursor.fetchone()
+
+        if not result:
+            return False, "无效的邀请码"
+
+        inviter_id = result[0]
+
+        # 检查邀请人是否已达到邀请上限
+        cursor.execute('SELECT COUNT(*) FROM invite_relations WHERE inviter_id = ? AND invitee_id IS NOT NULL',
+                       (inviter_id,))
+        invite_count = cursor.fetchone()[0]
+        if invite_count >= 20:
+            return False, "邀请人已达到20人邀请上限"
+
+        # 检查是否已经被邀请过
+        cursor.execute('SELECT inviter_id FROM invite_relations WHERE invitee_id = ?', (str(invitee_id),))
+        if cursor.fetchone():
+            return False, "您已经被其他用户邀请过了"
+
+        # 检查是否自己邀请自己
+        if str(inviter_id) == str(invitee_id):
+            return False, "不能邀请自己"
+
+        # 添加邀请关系
+        cursor.execute('''
+        INSERT INTO invite_relations (inviter_id, invitee_id, invite_code)
+        VALUES (?, ?, ?)
+        ''', (inviter_id, str(invitee_id), invite_code))
+
+        conn.commit()
+
+        # 给邀请人增加奖励次数
+        add_paid_quota(inviter_id, 5)
+
+        return True, "邀请成功！邀请人已获得5次付费转发次数"
+
+    except Exception as e:
+        log.exception(f"处理邀请失败: {e}")
+        conn.rollback()
+        return False, "处理邀请时发生错误"
+    finally:
+        conn.close()
+
+
+def get_invite_stats(user_id):
+    """获取用户的邀请统计信息"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # 获取成功邀请的人数（invitee_id 不为 NULL 的记录）
+    cursor.execute('SELECT COUNT(*) FROM invite_relations WHERE inviter_id = ? AND invitee_id IS NOT NULL',
+                   (str(user_id),))
+    invite_count = cursor.fetchone()[0]
+
+    # 获取获得的奖励次数
+    cursor.execute('SELECT paid_quota FROM user_forward_quota WHERE user_id = ?', (str(user_id),))
+    result = cursor.fetchone()
+    reward_count = result[0] if result else 0
+
+    conn.close()
+    return invite_count, reward_count
 
 
 # 保存消息转发关系
@@ -1151,18 +1264,16 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
 # 5、业务逻辑与事件处理
 # 定义处理新消息的函数
 async def on_new_link(event: events.NewMessage.Event) -> None:
-    # 检查系统负载
-    if SYSTEM_OVERLOADED:
-        await event.reply("系统当前负载较高，请稍后再试...")
-        return
-
     text = event.text
     if not text:
         return
     # 检查消息是否包含有效的Telegram链接
     if not text.startswith(("https://t.me", "http://t.me")):
         return
-
+    # 检查系统负载
+    if SYSTEM_OVERLOADED:
+        await event.reply("系统当前负载较高，请稍后再试...")
+        return
     user_id = event.sender_id
     # 检查用户是否已经有正在处理的请求
     if user_id in USER_LOCKS and USER_LOCKS[user_id]:
@@ -1569,6 +1680,58 @@ async def callback_handler(event):
 # 命令处理函数
 async def cmd_start(event):
     """处理 /start 命令，显示使用方法说明"""
+    # 检查是否有邀请码参数
+    args = event.text.split()
+    if len(args) > 1:
+        invite_code = args[1].upper()
+        success, message = process_invite(invite_code, event.sender_id)
+        if success:
+            # 获取邀请人信息
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
+            inviter_id = cursor.fetchone()[0]
+            conn.close()
+
+            # 获取邀请人用户名
+            try:
+                inviter = await bot_client.get_entity(int(inviter_id))
+                inviter_name = inviter.username if inviter.username else f"用户{inviter_id}"
+            except:
+                inviter_name = f"用户{inviter_id}"
+
+            # 通知邀请人
+            try:
+                await bot_client.send_message(
+                    int(inviter_id),
+                    f"🎉 您的好友 @{event.sender.username if event.sender.username else f'用户{event.sender_id}'} 已通过您的邀请链接加入！\n您已获得5次付费转发次数奖励！立即查看 /user"
+                )
+            except:
+                pass
+
+            # 直接显示使用方法
+            usage_text = """🤖 使用方法 🤖
+
+1️⃣ 发送需要转发的消息链接
+2️⃣ 机器人将帮您保存该消息
+3️⃣ 每天免费5次，次日0点重置
+
+❓ 如何获取链接：
+- 在消息上点击"分享"
+- 选择"复制链接"
+- 将链接发送给机器人
+
+📌范围：支持频道、群组、评论区
+📄类型：支持视频、图片、音频、文件、文字
+⚠️注意：私人频道/群组额外要求:方式一：给机器人发送邀请链接（推荐）;方式二：授权登录你的账号（不推荐）
+
+🎁 邀请系统：
+- 使用 /invite 生成您的邀请链接
+- 每成功邀请1人获得5次付费转发次数
+"""
+            await event.reply(usage_text)
+            return
+
     usage_text = """🤖 使用方法 🤖
 
 1️⃣ 发送需要转发的消息链接
@@ -1581,7 +1744,12 @@ async def cmd_start(event):
 - 将链接发送给机器人
 
 📌范围：支持频道、群组、评论区
-⚠️注意：私人频道/群组:方式一：邀请 @gsix618 进群（推荐）;方式二：授权登录你的账号（不推荐）
+📄类型：支持视频、图片、音频、文件、文字
+⚠️注意：私人频道/群组额外要求:方式一：给机器人发送邀请链接（推荐）;方式二：授权登录你的账号（不推荐）
+
+🎁 邀请系统：
+- 使用 /invite 生成您的邀请链接
+- 每成功邀请1人获得5次付费转发次数
 """
     await event.reply(usage_text)
 
@@ -1683,6 +1851,102 @@ async def cmd_check(event):
         await event.reply("❌ 找不到此订单，请检查订单号是否正确。")
 
 
+async def cmd_invite(event):
+    """处理 /invite 命令，显示邀请信息"""
+    user_id = event.sender_id
+    invite_code = get_user_invite_code(user_id)
+    invite_count, reward_count = get_invite_stats(user_id)
+
+    # 获取用户名
+    sender = event.sender
+    username = sender.username if sender and sender.username else f"用户{user_id}"
+
+    # 获取机器人信息
+    bot_info = await bot_client.get_me()
+    bot_username = bot_info.username
+
+    invite_info = f"""🎁 邀请系统 🎁
+
+📊 邀请统计：
+  ├ 已邀请人数：{invite_count}/20 人
+  └ 获得奖励次数：{reward_count} 次
+
+💡 邀请规则：
+  ├ 每成功邀请1人获得5次付费转发次数
+  ├ 每个用户只能被邀请一次
+  ├ 不能邀请自己
+  └ 邀请人数上限20人
+
+📝 使用方法：
+1️⃣ 将您的邀请链接分享给好友
+2️⃣ 好友点击链接即可完成邀请
+3️⃣ 邀请成功后您将获得奖励
+
+🔗 邀请链接：
+https://t.me/{bot_username}?start={invite_code}
+"""
+    await event.reply(invite_info, parse_mode='markdown')
+
+
+async def cmd_invite_code(event):
+    """处理 /invite_code 命令，处理邀请码"""
+    text = event.text.split()
+    if len(text) < 2:
+        await event.reply("请提供邀请码，例如：`/invite_code ABC12345`", parse_mode='markdown')
+        return
+
+    invite_code = text[1].upper()
+    success, message = process_invite(invite_code, event.sender_id)
+
+    if success:
+        # 获取邀请人信息
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
+        inviter_id = cursor.fetchone()[0]
+        conn.close()
+
+        # 获取邀请人用户名
+        try:
+            inviter = await bot_client.get_entity(int(inviter_id))
+            inviter_name = inviter.username if inviter.username else f"用户{inviter_id}"
+        except:
+            inviter_name = f"用户{inviter_id}"
+
+        # 通知邀请人
+        try:
+            await bot_client.send_message(
+                int(inviter_id),
+                f"🎉 您的好友 @{event.sender.username if event.sender.username else f'用户{event.sender_id}'} 已使用您的邀请码！\n您已获得5次付费转发次数奖励！"
+            )
+        except:
+            pass
+
+        # 直接显示使用方法
+        usage_text = """🤖 使用方法 🤖
+
+1️⃣ 发送需要转发的消息链接
+2️⃣ 机器人将帮您保存该消息
+3️⃣ 每天免费5次，次日0点重置
+
+❓ 如何获取链接：
+- 在消息上点击"分享"
+- 选择"复制链接"
+- 将链接发送给机器人
+
+📌范围：支持频道、群组、评论区
+📄类型：支持视频、图片、音频、文件、文字
+⚠️注意：私人频道/群组额外要求:方式一：给机器人发送邀请链接（推荐）;方式二：授权登录你的账号（不推荐）
+
+🎁 邀请系统：
+- 使用 /invite 生成您的邀请链接
+- 每成功邀请1人获得5次付费转发次数
+"""
+        await event.reply(usage_text)
+    else:
+        await event.reply(message)
+
+
 # 6. 主函数定义
 async def main():
     # 初始化数据库
@@ -1701,7 +1965,8 @@ async def main():
             BotCommand(command="start", description="使用方法"),
             BotCommand(command="user", description="用户中心"),
             BotCommand(command="buy", description="购买次数"),
-            BotCommand(command="check", description="查询订单")
+            BotCommand(command="check", description="查询订单"),
+            BotCommand(command="invite", description="邀请好友")
         ]
         await bot_client(SetBotCommandsRequest(
             scope=BotCommandScopeDefault(),
@@ -1722,6 +1987,7 @@ async def main():
     bot_client.add_event_handler(cmd_user, events.NewMessage(pattern='/user', func=is_authorized))
     bot_client.add_event_handler(cmd_buy, events.NewMessage(pattern='/buy', func=is_authorized))
     bot_client.add_event_handler(cmd_check, events.NewMessage(pattern='/check', func=is_authorized))
+    bot_client.add_event_handler(cmd_invite, events.NewMessage(pattern='/invite', func=is_authorized))
 
     # 注册回调处理器
     bot_client.add_event_handler(callback_handler, events.CallbackQuery())
