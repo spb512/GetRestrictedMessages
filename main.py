@@ -954,14 +954,18 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
             album_files = await asyncio.gather(*[prepare_album_file(msg) for msg in media_group if msg.media])
             sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file=album_files,
                                                        caption=captions)
-            await bot_client.send_file(event.chat_id, file=album_files, caption=captions + addInfo,
-                                       reply_to=event.message.id)
             # 保存媒体组消息关系到数据库
             save_media_group_relations(
                 source_chat_id, media_group,
                 PRIVATE_CHAT_ID, sent_messages,
                 message.grouped_id
             )
+            messages = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=sent_messages)
+            media_files = [msg.media for msg in messages if msg.media]
+            caption = messages[0].text
+            # 按钮信息追加到原 caption 后面
+            await bot_client.send_file(event.chat_id, media_files, caption=caption + addInfo, reply_to=event.message.id)
+
             # 删除提示消息
             await status_message.delete()
             # 处理转发次数并发送提示消息
@@ -1014,11 +1018,6 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
                                                           thumb=thumb_path,
                                                           buttons=message.buttons,
                                                           force_document=force_document)
-                await bot_client.send_file(event.chat_id, file_path, caption=message.text + addInfo,
-                                           reply_to=event.message.id,
-                                           attributes=message.media.document.attributes, thumb=thumb_path,
-                                           buttons=message.buttons,
-                                           force_document=force_document)
                 os.remove(thumb_path)  # 发送后删除缩略图
             elif isinstance(message.media, MessageMediaDocument) and message.media.document.mime_type == 'audio/mpeg':
                 sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
@@ -1026,32 +1025,30 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
                                                           attributes=message.media.document.attributes,
                                                           buttons=message.buttons,
                                                           force_document=force_document)
-                await bot_client.send_file(event.chat_id, file_path, caption=message.text + addInfo,
-                                           reply_to=event.message.id,
-                                           attributes=message.media.document.attributes,
-                                           buttons=message.buttons,
-                                           force_document=force_document)
             else:
                 sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
                                                           caption=message.text, nosound_video=True,
                                                           buttons=message.buttons,
                                                           force_document=force_document)
-                await bot_client.send_file(event.chat_id, file_path, caption=message.text + addInfo,
-                                           reply_to=event.message.id,
-                                           buttons=message.buttons,
-                                           force_document=force_document)
             os.remove(file_path)  # 发送后删除文件
         else:
             sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text,
                                                          buttons=message.buttons)
-            await bot_client.send_message(event.chat_id, message.text + addInfo, buttons=message.buttons,
-                                          reply_to=event.message.id)
         # 保存消息关系到数据库
         save_message_relation(
             source_chat_id, message.id,
             PRIVATE_CHAT_ID, sent_message.id,
             0
         )
+        message = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=sent_message)
+        if message.media:
+            await bot_client.send_file(event.chat_id, message.media, caption=message.text + addInfo,
+                                       buttons=message.buttons,
+                                       reply_to=event.message.id)
+        else:
+            await bot_client.send_message(event.chat_id, message.text + addInfo, buttons=message.buttons,
+                                          reply_to=event.message.id)
+
         # 删除提示消息
         await status_message.delete()
 
