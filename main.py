@@ -865,6 +865,7 @@ async def prepare_album_file(msg: Message):
                     thumb_path = await user_client.download_media(
                         msg, file=f"{temp_file.name}_thumb.jpg", thumb=-1
                     )
+                # 对于文档类型，返回带有特殊标记的对象，以便后续处理
                 return InputMediaUploadedDocument(
                     file=await bot_client.upload_file(file_path),
                     thumb=await bot_client.upload_file(thumb_path) if thumb_path else None,
@@ -949,22 +950,40 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
                 return
             # 发送提示消息
             status_message = await event.reply("转存中，请稍等...")
-            captions = media_group[0].text
+
             # 构造相册的文件对象
             album_files = await asyncio.gather(*[prepare_album_file(msg) for msg in media_group if msg.media])
-            sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file=album_files,
-                                                       caption=captions)
+
+            # 检查媒体组中是否有文档类型的媒体
+            has_document = any(isinstance(msg.media, MessageMediaDocument) for msg in media_group if msg.media)
+            if has_document:
+                media_captions = [msg.text if msg.text else "" for msg in media_group]
+                sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file=album_files,
+                                                           caption=media_captions)
+            else:
+                captions = media_group[0].text
+                sent_messages = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file=album_files,
+                                                           caption=captions)
             # 保存媒体组消息关系到数据库
             save_media_group_relations(
                 source_chat_id, media_group,
                 PRIVATE_CHAT_ID, sent_messages,
                 message.grouped_id
             )
+
             messages = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=sent_messages)
             media_files = [msg.media for msg in messages if msg.media]
-            caption = messages[0].text
-            # 按钮信息追加到原 caption 后面
-            await bot_client.send_file(event.chat_id, media_files, caption=caption + addInfo, reply_to=event.message.id)
+
+            # 按钮信息追加到原 caption 后面，如果有文档类型媒体则使用列表形式的caption
+            if has_document:
+                media_captions = [msg.text if msg.text else "" for msg in messages]
+                media_captions[-1] = media_captions[-1] + addInfo  # 只在最后一个媒体添加caption和附加信息
+                await bot_client.send_file(event.chat_id, media_files, caption=media_captions,
+                                           reply_to=event.message.id)
+            else:
+                caption = messages[0].text
+                await bot_client.send_file(event.chat_id, media_files, caption=caption + addInfo,
+                                           reply_to=event.message.id)
 
             # 删除提示消息
             await status_message.delete()
