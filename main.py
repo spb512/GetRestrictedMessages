@@ -811,7 +811,7 @@ async def process_forward_quota(event):
 
 # 4. 辅助函数
 async def replace_message(message: Message):
-    if message.fwd_from:
+    if message.fwd_from and message.fwd_from.from_id and message.fwd_from.channel_post:
         peer_id = utils.get_peer_id(message.fwd_from.from_id)
         message_id = message.fwd_from.channel_post
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
