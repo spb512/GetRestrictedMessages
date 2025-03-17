@@ -64,12 +64,15 @@ addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\
 #     [Button.url("91转发|聊天", "https://example.com"), Button.url("91转发|通知", "https://t.me/joinchat/XXXXXX")]
 # ]
 
-# 添加全局变量
+# 过载条件阈值
 SYSTEM_OVERLOADED = False
 CPU_THRESHOLD = 80  # CPU使用率阈值（百分比）
 MEMORY_THRESHOLD = 80  # 内存使用率阈值（百分比）
 DISK_IO_THRESHOLD = 80  # 磁盘I/O使用率阈值（百分比）
 MONITOR_INTERVAL = 5  # 监控间隔（秒）
+
+# 用户锁定字典，用于防止并发转发请求
+USER_LOCKS = {}
 
 # 在配置加载时解析授权用户列表
 AUTH_USERS = set()
@@ -905,18 +908,14 @@ async def single_forward_message(event, relation):
 
 
 async def group_forward_message(event, grouped_messages):
-    # await event.reply("该消息组已经转发过，正在重新发送...")
-    try:
-        target_ids = [target_id for _, target_id in grouped_messages]
-        messages = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_ids)
-        media_files = [msg.media for msg in messages if msg.media]
-        caption = messages[0].text
-        # 按钮信息追加到原 caption 后面
-        await bot_client.send_file(event.chat_id, media_files, caption=caption + addInfo, reply_to=event.message.id)
-        # 处理转发次数并发送提示消息
-        await process_forward_quota(event)
-    except Exception as e:
-        log.exception(f"批量转发媒体组消息失败: {e}")
+    target_ids = [target_id for _, target_id in grouped_messages]
+    messages = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_ids)
+    media_files = [msg.media for msg in messages if msg.media]
+    caption = messages[0].text
+    # 按钮信息追加到原 caption 后面
+    await bot_client.send_file(event.chat_id, media_files, caption=caption + addInfo, reply_to=event.message.id)
+    # 处理转发次数并发送提示消息
+    await process_forward_quota(event)
 
 
 async def get_media_group_messages(initial_message, message_id, peer, client: TelegramClient) -> list:
@@ -972,6 +971,9 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请联系管理员")
+    finally:
+        # 无论成功与否，最终都要解锁用户
+        USER_LOCKS[event.sender_id] = False
 
 
 async def user_handle_single_message(event: events.NewMessage.Event, message, source_chat_id) -> None:
@@ -1058,6 +1060,9 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请联系管理员")
+    finally:
+        # 无论成功与否，最终都要解锁用户
+        USER_LOCKS[event.sender_id] = False
 
 
 async def bot_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id) -> None:
@@ -1086,6 +1091,9 @@ async def bot_handle_media_group(event: events.NewMessage.Event, message, media_
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请联系管理员")
+    finally:
+        # 无论成功与否，最终都要解锁用户
+        USER_LOCKS[event.sender_id] = False
 
 
 async def bot_handle_single_message(event: events.NewMessage.Event, message, source_chat_id) -> None:
@@ -1119,6 +1127,9 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
     except Exception as e:
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请联系管理员")
+    finally:
+        # 无论成功与否，最终都要解锁用户
+        USER_LOCKS[event.sender_id] = False
 
 
 # 5、业务逻辑与事件处理
@@ -1136,8 +1147,13 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     if not text.startswith(("https://t.me", "http://t.me")):
         return
 
-    # 检查用户转发次数
     user_id = event.sender_id
+    # 检查用户是否已经有正在处理的请求
+    if user_id in USER_LOCKS and USER_LOCKS[user_id]:
+        await event.reply("您有一个正在处理的转发请求，请等待完成后再发送新的请求。")
+        return
+
+    # 检查用户转发次数
     free_quota, paid_quota, _ = get_user_quota(user_id)
     total_quota = free_quota + paid_quota
 
@@ -1145,11 +1161,16 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         await event.reply("您今日的转发次数已用完！每天0点重置免费次数，或通过支付购买更多次数。")
         return
 
+    # 锁定用户，防止并发请求
+    USER_LOCKS[user_id] = True
+
     query = urllib.parse.urlparse(text).query
     params = dict(urllib.parse.parse_qsl(query))
     try:
         chat_id, message_id = await parse_url(text.split('?')[0])
     except ValueError:
+        # 如果解析失败，解锁用户
+        USER_LOCKS[user_id] = False
         await event.reply("无效链接")
         return
     source_chat_id = chat_id
@@ -1168,13 +1189,19 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
                 await event.reply("请先发送频道里任意一条消息的链接，再发送评论区消息的链接")
             else:
                 await event.reply("私人频道/私人群组，请先邀请中转用户 @gsix618 进群。")
+            # 解锁用户，允许发送新请求
+            USER_LOCKS[user_id] = False
             return
         except ChannelPrivateError as e:
             await event.reply("此群组/频道无法访问，或你已被拉黑(踢了)")
+            # 解锁用户，允许发送新请求
+            USER_LOCKS[user_id] = False
             return
         except Exception as e:
             log.exception(f"Error: {e}")
             await event.reply("服务器内部错误，请联系管理员")
+            # 解锁用户，允许发送新请求
+            USER_LOCKS[user_id] = False
             return
         entity = await user_client.get_entity(peer)
         if isinstance(entity, Channel) and not entity.megagroup:  # 频道
@@ -1217,6 +1244,8 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             peer_type = channel.get("type")
         else:
             await event.reply("服务器内部错误，请联系管理员")
+            # 解锁用户，允许发送新请求
+            USER_LOCKS[user_id] = False
             return
         is_channel = peer_type == "channel"
         if is_channel:  # 公开频道
@@ -1226,6 +1255,8 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             except Exception as e:
                 log.exception(f"Error: {e}")
                 await event.reply("服务器内部错误，请联系管理员")
+                # 解锁用户，允许发送新请求
+                USER_LOCKS[user_id] = False
                 return
             is_comment = 'comment' in params
             if is_comment:
@@ -1254,6 +1285,8 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             else:
                 if not has_protected_content:
                     await event.reply("此消息允许转发！无需使用本机器人")
+                    # 解锁用户，允许发送新请求
+                    USER_LOCKS[user_id] = False
                     return
                 # 3、无评论-单个
                 if is_single:
@@ -1265,6 +1298,8 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
         else:  # 公开群组
             if not has_protected_content:
                 await event.reply("此消息允许转发！无需使用本机器人")
+                # 解锁用户，允许发送新请求
+                USER_LOCKS[user_id] = False
                 return
             try:
                 # 获取指定聊天中的消息
@@ -1272,6 +1307,8 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
             except Exception as e:
                 log.exception(f"Error: {e}")
                 await event.reply("服务器内部错误，请联系管理员")
+                # 解锁用户，允许发送新请求
+                USER_LOCKS[user_id] = False
                 return
             result = await replace_message(message)
             if result:
