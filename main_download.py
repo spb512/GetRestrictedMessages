@@ -212,34 +212,36 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
     # 为临时文件添加扩展名
     suffix = ".jpg" if isinstance(msg.media,
                                   MessageMediaPhoto) else ".mp4" if "video/mp4" in msg.media.document.mime_type else ""
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+    temp_file = None
+    thumb_path = None
+    file_path = None
+    try:
+        temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
         file_path = await client.download_media(msg, file=temp_file.name)
-        temp_file.close()  # 先关闭文件
-        thumb_path = None
-
-        try:
-            if isinstance(msg.media, MessageMediaPhoto):
-                # print(file_path)
-                return InputMediaUploadedPhoto(file=await client.upload_file(file_path))
-
-            elif isinstance(msg.media, MessageMediaDocument):
-                if (msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024) or (
-                        msg.media.document.mime_type == "image/heic"):
-                    thumb_path = await client.download_media(
-                        msg, file=f"{temp_file.name}_thumb.jpg", thumb=-1
-                    )
-                return InputMediaUploadedDocument(
-                    file=await client.upload_file(file_path),
-                    thumb=await client.upload_file(thumb_path) if thumb_path else None,
-                    mime_type=msg.media.document.mime_type or "application/octet-stream",
-                    attributes=msg.media.document.attributes,
-                    nosound_video=True
+        if isinstance(msg.media, MessageMediaPhoto):
+            return InputMediaUploadedPhoto(file=await client.upload_file(file_path))
+        elif isinstance(msg.media, MessageMediaDocument):
+            if (msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024) or (
+                    msg.media.document.mime_type == "image/heic"):
+                thumb_path = await client.download_media(
+                    msg, file=f"{temp_file.name}_thumb.jpg", thumb=-1
                 )
-        finally:
-            # 删除临时文件
+            # 对于文档类型，返回带有特殊标记的对象，以便后续处理
+            return InputMediaUploadedDocument(
+                file=await client.upload_file(file_path),
+                thumb=await client.upload_file(thumb_path) if thumb_path else None,
+                mime_type=msg.media.document.mime_type or "application/octet-stream",
+                attributes=msg.media.document.attributes,
+                nosound_video=True
+            )
+    finally:
+        # 删除临时文件
+        if temp_file:
+            temp_file.close()
+        if os.path.exists(file_path):
             os.remove(file_path)
-            if thumb_path:
-                os.remove(thumb_path)
+        if thumb_path:
+            os.remove(thumb_path)
 
 
 async def get_media_group_messages(initial_message, message_id, peer) -> list:
