@@ -968,11 +968,8 @@ async def prepare_album_file(msg: Message):
     try:
         temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
         file_path = await user_client.download_media(msg, file=temp_file.name)
-        temp_file.close()  # 先关闭文件
         if isinstance(msg.media, MessageMediaPhoto):
-            # print(file_path)
             return InputMediaUploadedPhoto(file=await bot_client.upload_file(file_path))
-
         elif isinstance(msg.media, MessageMediaDocument):
             if (msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024) or (
                     msg.media.document.mime_type == "image/heic"):
