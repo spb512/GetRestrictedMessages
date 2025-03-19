@@ -1,10 +1,13 @@
-from datetime import datetime
 import logging
+from datetime import datetime
+
 from telethon.tl.types import Message
+
 from .database import get_db_connection
 
 # 初始化日志记录器
 log = logging.getLogger("MessageRelations")
+
 
 def save_message_relation(source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id=None):
     """保存消息转发关系"""
@@ -17,7 +20,7 @@ def save_message_relation(source_chat_id, source_message_id, target_chat_id, tar
             (source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id, created_at) 
             VALUES (?, ?, ?, ?, ?, ?)
             ''', (
-            str(source_chat_id), source_message_id, str(target_chat_id), target_message_id, grouped_id, created_at))
+                str(source_chat_id), source_message_id, str(target_chat_id), target_message_id, grouped_id, created_at))
             conn.commit()
         except Exception as e:
             if 'UNIQUE constraint failed' in str(e):
@@ -28,7 +31,8 @@ def save_message_relation(source_chat_id, source_message_id, target_chat_id, tar
                 SET target_message_id = ?, grouped_id = ?, created_at = ?
                 WHERE source_chat_id = ? AND source_message_id = ? AND target_chat_id = ?
                 ''', (
-                target_message_id, grouped_id, created_at, str(source_chat_id), source_message_id, str(target_chat_id)))
+                    target_message_id, grouped_id, created_at, str(source_chat_id), source_message_id,
+                    str(target_chat_id)))
                 conn.commit()
             else:
                 log.exception(f"保存消息关系失败: {e}")
@@ -89,4 +93,4 @@ def find_grouped_messages(source_chat_id, grouped_id, target_chat_id):
         WHERE source_chat_id = ? AND grouped_id = ? AND target_chat_id = ?
         ''', (str(source_chat_id), grouped_id, str(target_chat_id)))
         results = cursor.fetchall()
-    return results 
+    return results

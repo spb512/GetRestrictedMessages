@@ -1,9 +1,11 @@
-from datetime import datetime
 import logging
+from datetime import datetime
+
 from .database import get_db_connection
 
 # 初始化日志记录器
 log = logging.getLogger("UserQuota")
+
 
 def get_user_quota(user_id):
     """获取用户当前的转发次数配额"""
@@ -91,18 +93,18 @@ def add_paid_quota(user_id, amount):
 def reset_all_free_quotas():
     """重置所有用户的免费次数（定时任务使用）"""
     current_date = datetime.now().strftime('%Y-%m-%d')
-    
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
+
         # 查找所有昨天的记录（last_reset_date不等于今天）
         cursor.execute('SELECT user_id FROM user_forward_quota WHERE last_reset_date != ?', (current_date,))
         users = cursor.fetchall()
-        
+
         if not users:
             log.info("没有需要重置的用户免费次数")
             return 0
-            
+
         # 更新所有这些用户的免费次数和重置日期
         cursor.execute('''
         UPDATE user_forward_quota 
@@ -111,8 +113,8 @@ def reset_all_free_quotas():
             updated_at = CURRENT_TIMESTAMP
         WHERE last_reset_date != ?
         ''', (current_date, current_date))
-        
+
         count = cursor.rowcount
         conn.commit()
         log.info(f"已重置 {count} 名用户的免费次数")
-        return count 
+        return count

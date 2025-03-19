@@ -12,6 +12,7 @@ from db import (
 # 初始化日志记录器
 log = logging.getLogger("UserManager")
 
+
 async def check_user_quota(user_id):
     """
     检查用户的剩余配额
@@ -22,6 +23,7 @@ async def check_user_quota(user_id):
     free_quota, paid_quota, _ = get_user_quota(user_id)
     return paid_quota, free_quota
 
+
 async def get_user_info(user_id):
     """
     获取用户信息
@@ -30,7 +32,7 @@ async def get_user_info(user_id):
     :return: 用户信息字符串
     """
     free_quota, paid_quota, total_used = get_user_quota(user_id)
-    
+
     info = f"""📊 用户信息 📊
 
 🆔 用户ID: {user_id}
@@ -43,6 +45,7 @@ async def get_user_info(user_id):
 免费用户每天可获得{RANGE}次免费转发机会。
 """
     return info
+
 
 async def add_user_quota(user_id, quota_amount, is_paid=True):
     """
@@ -65,6 +68,7 @@ async def add_user_quota(user_id, quota_amount, is_paid=True):
         log.exception(f"增加用户配额时出错: {e}")
         return False
 
+
 async def use_quota(user_id, amount=1):
     """
     使用用户配额，优先使用免费配额
@@ -75,15 +79,15 @@ async def use_quota(user_id, amount=1):
     """
     free_quota, paid_quota, _ = get_user_quota(user_id)
     total_available = paid_quota + free_quota
-    
+
     if total_available < amount:
         log.warning(f"用户 {user_id} 配额不足: 需要 {amount}，可用 {total_available}")
         return 0, 0, 0, False
-    
+
     # 优先使用免费配额
     used_free = min(free_quota, amount)
     used_paid = amount - used_free
-    
+
     decrease_user_quota(user_id)
     log.info(f"用户 {user_id} 使用了 {used_free} 免费配额和 {used_paid} 付费配额")
-    return amount, used_free, used_paid, True 
+    return amount, used_free, used_paid, True

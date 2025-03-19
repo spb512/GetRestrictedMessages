@@ -58,11 +58,13 @@ async def start_handler(event):
         return
     await cmd_start(event, bot_client)
 
+
 @bot_client.on(NewMessage(pattern='/user'))
 async def user_handler(event):
     if not is_authorized(event):
         return
     await cmd_user(event)
+
 
 @bot_client.on(NewMessage(pattern='/buy'))
 async def buy_handler(event):
@@ -70,11 +72,13 @@ async def buy_handler(event):
         return
     await cmd_buy(event)
 
+
 @bot_client.on(NewMessage(pattern='/check'))
 async def check_handler(event):
     if not is_authorized(event):
         return
     await cmd_check(event)
+
 
 @bot_client.on(NewMessage(pattern='/invite'))
 async def invite_handler(event):
@@ -82,17 +86,20 @@ async def invite_handler(event):
         return
     await cmd_invite(event, bot_client)
 
+
 @bot_client.on(NewMessage(pattern='/invite_code'))
 async def invite_code_handler(event):
     if not is_authorized(event):
         return
     await cmd_invite_code(event, bot_client)
 
+
 # 注册回调处理器
 @bot_client.on(CallbackQuery())
 async def callback_query_handler(event):
     # 执行回调处理
     await callback_handler(event, bot_client)
+
 
 # 注册消息处理器
 @bot_client.on(NewMessage())
@@ -102,20 +109,21 @@ async def message_handler(event):
     # 调用链接处理函数
     await on_new_link(event, bot_client, user_client, system_overloaded=SYSTEM_OVERLOADED, bot_token=BOT_TOKEN)
 
+
 # 6. 主函数定义
 async def main():
     # 声明全局变量
     global SYSTEM_OVERLOADED
-    
+
     # 客户端初始化
     log.info("启动机器人")
     await bot_client.connect()
     await user_client.connect()
-    
+
     # 获取机器人的用户信息
     ubot_self = await bot_client.get_me()
     log.info("机器人已启动为 %s", ubot_self.username or ubot_self.id)
-    
+
     # 获取 user_client 的用户信息
     u_user = await user_client.get_me()
     log.info("用户客户端已启动为 %s", u_user.username or u_user.id)
@@ -131,7 +139,7 @@ async def main():
         usdt_contract=USDT_CONTRACT
     ))
     log.info(f"已启动自动检查交易状态的定时任务，间隔 {TRANSACTION_CHECK_INTERVAL} 秒")
-    
+
     # 启动系统资源监控线程
     start_system_monitor(
         cpu_threshold=CPU_THRESHOLD,
@@ -140,18 +148,18 @@ async def main():
         monitor_interval=MONITOR_INTERVAL,
         system_overloaded_var=system_overloaded_ref
     )
-    
+
     # 更新全局过载标志的监控钩子
     def update_global_overloaded():
         global SYSTEM_OVERLOADED
         while True:
             SYSTEM_OVERLOADED = bool(system_overloaded_ref.value)
             time.sleep(1)
-    
+
     # 启动全局变量更新线程
     update_thread = threading.Thread(target=update_global_overloaded, daemon=True)
     update_thread.start()
-    
+
     # 启动并等待两个客户端断开连接
     await bot_client.run_until_disconnected()  # 运行 BOT_SESSION
     await user_client.run_until_disconnected()  # 运行 USER_SESSION

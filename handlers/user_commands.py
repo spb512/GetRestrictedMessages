@@ -13,6 +13,7 @@ from db import (
 # 初始化日志记录器
 log = logging.getLogger("UserCommands")
 
+
 async def cmd_start(event, bot_client):
     """处理 /start 命令，显示使用方法说明"""
     # 检查是否有邀请码参数
@@ -26,13 +27,6 @@ async def cmd_start(event, bot_client):
                 cursor = conn.cursor()
                 cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
                 inviter_id = cursor.fetchone()[0]
-
-            # 获取邀请人用户名
-            try:
-                inviter = await bot_client.get_entity(int(inviter_id))
-                inviter_name = inviter.username if inviter.username else f"用户{inviter_id}"
-            except:
-                inviter_name = f"用户{inviter_id}"
 
             # 通知邀请人
             try:
@@ -191,10 +185,6 @@ async def cmd_invite(event, bot_client):
     invite_code = get_user_invite_code(user_id)
     invite_count, reward_count = get_invite_stats(user_id)
 
-    # 获取用户名
-    sender = event.sender
-    username = sender.username if sender and sender.username else f"用户{user_id}"
-
     # 获取机器人信息
     bot_info = await bot_client.get_me()
     bot_username = bot_info.username
@@ -239,13 +229,6 @@ async def cmd_invite_code(event, bot_client):
             cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
             inviter_id = cursor.fetchone()[0]
 
-        # 获取邀请人用户名
-        try:
-            inviter = await bot_client.get_entity(int(inviter_id))
-            inviter_name = inviter.username if inviter.username else f"用户{inviter_id}"
-        except:
-            inviter_name = f"用户{inviter_id}"
-
         # 通知邀请人
         try:
             await bot_client.send_message(
@@ -277,4 +260,4 @@ async def cmd_invite_code(event, bot_client):
 """
         await event.reply(f"✅ {message}\n\n{usage_text}")
     else:
-        await event.reply(message) 
+        await event.reply(message)

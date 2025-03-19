@@ -3,6 +3,7 @@
 """
 
 import logging
+
 from decouple import config
 
 # 初始化日志记录器
@@ -82,4 +83,4 @@ def is_authorized(event):
 
     # 校验 ID 或用户名是否在授权列表中
     # 由于在配置加载时已经添加了带@和不带@的格式，这里直接检查即可
-    return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private 
+    return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private

@@ -1,17 +1,18 @@
-import logging
 import asyncio
+import logging
 from datetime import datetime
+
 from telethon.tl.custom import Button
 
+# 获取全局变量
+from config import USDT_WALLET, ADMIN_ID
 from db import (
     get_order_by_id, create_new_order
 )
 
-# 获取全局变量
-from config import USDT_WALLET, ADMIN_ID
-
 # 初始化日志记录器
 log = logging.getLogger("CallbackHandler")
+
 
 async def callback_handler(event, bot_client):
     """处理按钮点击事件"""
@@ -211,4 +212,4 @@ async def callback_handler(event, bot_client):
 
     # 其他回调数据
     else:
-        await event.answer("未知操作", alert=True) 
+        await event.answer("未知操作", alert=True)

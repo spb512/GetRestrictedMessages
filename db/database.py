@@ -9,6 +9,7 @@ DB_FILE = "message_forward.db"
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(asctime)s - %(message)s")
 log = logging.getLogger("DB")
 
+
 @contextmanager
 def get_db_connection():
     """提供SQLite数据库连接的上下文管理器"""
@@ -17,6 +18,7 @@ def get_db_connection():
         yield conn
     finally:
         conn.close()
+
 
 def init_db():
     """初始化数据库，创建所需的表结构"""
@@ -78,4 +80,4 @@ def init_db():
         ''')
 
         conn.commit()
-    log.info("数据库初始化完成") 
+    log.info("数据库初始化完成")

@@ -27,6 +27,7 @@ addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\
 # 用户锁定字典，防止并发请求
 USER_LOCKS = {}
 
+
 async def process_forward_quota(event):
     """处理转发次数减少并发送提示消息的公共方法"""
     # 减少用户转发次数
@@ -81,7 +82,7 @@ async def prepare_album_file(msg: Message, user_client, bot_client):
     temp_file = None
     thumb_path = None
     file_path = None
-    
+
     try:
         temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
         file_path = await user_client.download_media(msg, file=temp_file.name)
@@ -178,7 +179,8 @@ async def get_media_group_messages(initial_message, message_id, peer, client) ->
     return media_group
 
 
-async def user_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id, bot_client, user_client) -> None:
+async def user_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id, bot_client,
+                                  user_client) -> None:
     try:
         # 先检查数据库中是否有该消息组的转发记录
         if message.grouped_id:
@@ -190,7 +192,8 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
             status_message = await event.reply("转存中，请稍等...")
 
             # 构造相册的文件对象
-            album_files = await asyncio.gather(*[prepare_album_file(msg, user_client, bot_client) for msg in media_group if msg.media])
+            album_files = await asyncio.gather(
+                *[prepare_album_file(msg, user_client, bot_client) for msg in media_group if msg.media])
 
             # 检查媒体组中是否有文档类型的媒体
             has_document = any(isinstance(msg.media, MessageMediaDocument) for msg in media_group if msg.media)
@@ -237,7 +240,8 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
         USER_LOCKS[event.sender_id] = False
 
 
-async def user_handle_single_message(event: events.NewMessage.Event, message, source_chat_id, bot_client, user_client) -> None:
+async def user_handle_single_message(event: events.NewMessage.Event, message, source_chat_id, bot_client,
+                                     user_client) -> None:
     try:
         # 检查数据库中是否有该消息的转发记录
         relation = find_forwarded_message_for_one(source_chat_id, message.id, PRIVATE_CHAT_ID)
@@ -319,7 +323,8 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
         USER_LOCKS[event.sender_id] = False
 
 
-async def bot_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id, bot_client) -> None:
+async def bot_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id,
+                                 bot_client) -> None:
     try:
         # 检查数据库中是否有该消息组的转发记录
         if message.grouped_id:
@@ -386,7 +391,8 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
         USER_LOCKS[event.sender_id] = False
 
 
-async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, system_overloaded=False, bot_token=None) -> None:
+async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, system_overloaded=False,
+                      bot_token=None) -> None:
     """处理新的链接消息"""
     text = event.text
     if not text:
@@ -485,7 +491,8 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
                     else:
                         media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                        await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
+                        await user_handle_media_group(event, message, media_group, source_chat_id, bot_client,
+                                                      user_client)
 
     else:  # 公开频道和公开群组
         peer = chat_id
@@ -534,7 +541,8 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                             comment_media_group.append(reply)
                     # 反转列表
                     comment_media_group.reverse()
-                    await user_handle_media_group(event, comment_message, comment_media_group, source_chat_id, bot_client, user_client)
+                    await user_handle_media_group(event, comment_message, comment_media_group, source_chat_id,
+                                                  bot_client, user_client)
             else:
                 if not has_protected_content:
                     await event.reply("此消息允许转发！无需使用本机器人")
@@ -582,4 +590,4 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                 # 8、无替代-多个
                 else:
                     media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                    await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client) 
+                    await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)

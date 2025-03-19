@@ -4,13 +4,15 @@
 
 import logging
 import time
+
 import psutil
 
 # 初始化日志记录器
 log = logging.getLogger("SystemMonitor")
 
-def monitor_system_resources(cpu_threshold, memory_threshold, disk_io_threshold, 
-                            monitor_interval, system_overloaded_var):
+
+def monitor_system_resources(cpu_threshold, memory_threshold, disk_io_threshold,
+                             monitor_interval, system_overloaded_var):
     """
     监控系统资源使用情况，并在超过阈值时设置系统过载标志
     
@@ -44,16 +46,16 @@ def monitor_system_resources(cpu_threshold, memory_threshold, disk_io_threshold,
 
             # 检查是否超过阈值
             current_overloaded = bool(system_overloaded_var.value)
-            is_overloaded = (cpu_percent > cpu_threshold or 
-                memory_percent > memory_threshold or 
-                disk_io_percent > disk_io_threshold)
-                
+            is_overloaded = (cpu_percent > cpu_threshold or
+                             memory_percent > memory_threshold or
+                             disk_io_percent > disk_io_threshold)
+
             # 只在状态变化时记录日志和更新值
             if is_overloaded != current_overloaded:
                 # 获取锁并更新值
                 with system_overloaded_var.get_lock():
                     system_overloaded_var.value = is_overloaded
-                
+
                 if is_overloaded:
                     log.warning(
                         f"系统负载过高 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
@@ -67,8 +69,9 @@ def monitor_system_resources(cpu_threshold, memory_threshold, disk_io_threshold,
             log.exception(f"系统监控异常: {e}")
             time.sleep(monitor_interval)
 
-def start_system_monitor(cpu_threshold, memory_threshold, disk_io_threshold, 
-                        monitor_interval, system_overloaded_var):
+
+def start_system_monitor(cpu_threshold, memory_threshold, disk_io_threshold,
+                         monitor_interval, system_overloaded_var):
     """
     启动系统资源监控线程
     
@@ -80,15 +83,15 @@ def start_system_monitor(cpu_threshold, memory_threshold, disk_io_threshold,
     :return: 监控线程
     """
     import threading
-    
+
     # 创建并启动监控线程
     monitor_thread = threading.Thread(
         target=monitor_system_resources,
-        args=(cpu_threshold, memory_threshold, disk_io_threshold, 
+        args=(cpu_threshold, memory_threshold, disk_io_threshold,
               monitor_interval, system_overloaded_var),
         daemon=True
     )
     monitor_thread.start()
-    
+
     log.info("已启动系统资源监控线程")
-    return monitor_thread 
+    return monitor_thread

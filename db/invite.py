@@ -7,9 +7,11 @@ from .user_quota import add_paid_quota
 # 初始化日志记录器
 log = logging.getLogger("Invite")
 
+
 def generate_invite_code():
     """生成唯一的邀请码"""
     return str(uuid.uuid4())[:8].upper()
+
 
 def get_user_invite_code(user_id):
     """获取用户的邀请码"""
@@ -31,6 +33,7 @@ def get_user_invite_code(user_id):
             return invite_code
 
     return result[0]
+
 
 def process_invite(invite_code, invitee_id):
     """处理邀请关系并发放奖励"""
@@ -81,6 +84,7 @@ def process_invite(invite_code, invitee_id):
             conn.rollback()
             return False, "处理邀请时发生错误"
 
+
 def get_invite_stats(user_id):
     """获取用户的邀请统计信息"""
     with get_db_connection() as conn:
@@ -96,4 +100,4 @@ def get_invite_stats(user_id):
         result = cursor.fetchone()
         reward_count = result[0] if result else 0
 
-    return invite_count, reward_count 
+    return invite_count, reward_count

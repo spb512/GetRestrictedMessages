@@ -16,6 +16,7 @@ from db import (
 # 初始化日志记录器
 log = logging.getLogger("TaskScheduler")
 
+
 async def notify_user_order_completed(order, bot_client):
     """通知用户订单已完成"""
     # 解包订单信息
@@ -197,7 +198,8 @@ async def schedule_transaction_checker(bot_client, trongrid_api_key, usdt_contra
                         continue
 
                     # 检查交易
-                    await check_trc20_transaction(order_id, payment_address, bot_client, trongrid_api_key, usdt_contract)
+                    await check_trc20_transaction(order_id, payment_address, bot_client, trongrid_api_key,
+                                                  usdt_contract)
 
                     # 每个订单检查后稍微延迟，避免API请求过于频繁
                     await asyncio.sleep(2)
@@ -224,4 +226,4 @@ async def schedule_quota_reset():
 
         # 重置所有用户的免费次数
         affected_users = reset_all_free_quotas()
-        log.info(f"已在 {datetime.now()} 重置了 {affected_users} 个用户的免费转发次数") 
+        log.info(f"已在 {datetime.now()} 重置了 {affected_users} 个用户的免费转发次数")
