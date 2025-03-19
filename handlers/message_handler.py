@@ -6,7 +6,9 @@ import time
 import urllib.parse
 
 from telethon import events, utils
-from telethon.errors import ChannelPrivateError
+from telethon.errors import ChannelPrivateError, InviteHashInvalidError, UserAlreadyParticipantError, \
+    UserBannedInChannelError, InviteRequestSentError, UserRestrictedError, InviteHashExpiredError, FloodWaitError
+from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.types import MessageMediaDocument, PeerChannel, Message, MessageMediaPhoto, InputMediaUploadedPhoto, \
     InputMediaUploadedDocument
 
@@ -398,41 +400,44 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
     if not text:
         return
     
-    # 检查是否是邀请链接 (t.me/joinchat/ 或 t.me/+)
-    if "t.me/joinchat/" in text or "t.me/+" in text:
+    # 检查是否是邀请链接 (t.me/+)
+    if "t.me/+" in text:
         try:
-            # 尝试通过用户客户端加入群组或频道
-            result = await user_client.get_entity(text)
-            # 如果成功获取实体，说明已经成功加入或已经是成员
+            # 提取邀请链接哈希部分
+            invite_hash = text.split("/")[-1].replace("+", "")
+            await user_client(ImportChatInviteRequest(invite_hash))
             await event.reply("已成功加入该群组/频道！现在请发送你需要转发的消息链接。")
             return
-        except ChannelPrivateError:
-            # 私有频道无法访问
-            await event.reply("加入失败：此群组/频道仍然无法访问。请联系管理员手动加入。")
+        except InviteHashInvalidError:
+            await event.reply("邀请链接无效或已过期。")
             return
-        except ValueError as e:
-            # 链接格式错误
-            if "No user has" in str(e):
-                await event.reply("加入失败：邀请链接已失效或已过期")
-            else:
-                await event.reply("加入失败：邀请链接格式错误")
+        except InviteHashExpiredError:  # 这里新增捕获
+            log.info("邀请链接已过期或被封禁")
+            await event.reply("邀请链接已过期或被封禁，请联系管理员获取新的链接。")
+            return
+        except UserAlreadyParticipantError:
+            log.info("已经该群中,继续")
+            await event.reply("已成功加入该群组/频道！现在请发送你需要转发的消息链接。")
+            return
+        except UserBannedInChannelError:
+            log.info("被该群封禁，无法加入")
+            await event.reply("加入群组/频道失败,请联系管理员。")
+            return
+        except InviteRequestSentError:
+            log.info("等待管理员审核")
+            await event.reply("等待管理员审核,请过段时间再发送消息链接")
+            return
+        except UserRestrictedError:
+            log.info("账号受限")
+            await event.reply("加入群组/频道失败,请联系管理员。")
+            return
+        except FloodWaitError:
+            log.info("触发滥用限制")
+            await event.reply("加入群组/频道失败,请联系管理员。")
             return
         except Exception as e:
-            error_message = str(e).lower()
             log.exception(f"加入群组/频道失败: {e}")
-            
-            if "wait" in error_message or "flood" in error_message:
-                # 频率限制
-                await event.reply("加入失败：操作过于频繁，请稍后再试")
-            elif "join" in error_message and "request" in error_message:
-                # 需要管理员批准
-                await event.reply("已发送入群申请，等待管理员批准。请过段时间再发送消息链接。")
-            elif "bot" in error_message or "captcha" in error_message or "verify" in error_message:
-                # 可能需要机器人验证
-                await event.reply("加入请求已发送，但可能需要完成验证。请联系管理员手动加入。")
-            else:
-                # 其他错误
-                await event.reply(f"加入群组/频道失败,请联系管理员。")
+            await event.reply("加入群组/频道失败,请联系管理员。")
             return
     
     # 检查消息是否包含有效的Telegram链接
