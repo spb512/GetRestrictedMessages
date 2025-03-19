@@ -24,11 +24,11 @@ from config import (
     API_ID, API_HASH, BOT_SESSION, USER_SESSION, BOT_TOKEN,
     is_authorized,
     SYSTEM_OVERLOADED, CPU_THRESHOLD, MEMORY_THRESHOLD, DISK_IO_THRESHOLD,
-    MONITOR_INTERVAL, TRANSACTION_CHECK_INTERVAL, TRONGRID_API_KEY, USDT_CONTRACT  # 缺少这两个
+    MONITOR_INTERVAL, TRANSACTION_CHECK_INTERVAL, TRONGRID_API_KEY, USDT_CONTRACT
 )
 
 from services import (
-    schedule_transaction_checker, schedule_quota_reset
+    schedule_transaction_checker, schedule_quota_reset, start_system_monitor
 )
 
 # 初始化日志记录器
@@ -95,60 +95,14 @@ async def message_handler(event):
     if not is_authorized(event):
         return
     # 调用链接处理函数
-    await on_new_link(event, bot_client, user_client, system_overloaded=False, bot_token=BOT_TOKEN)
-
-# 添加系统监控函数
-def monitor_system_resources():
-    """监控系统资源使用情况，并在超过阈值时设置系统过载标志"""
-    global SYSTEM_OVERLOADED
-
-    while True:
-        try:
-            # 获取CPU使用率
-            cpu_percent = psutil.cpu_percent(interval=1)
-
-            # 获取内存使用率
-            memory_percent = psutil.virtual_memory().percent
-
-            # 获取磁盘I/O使用率
-            disk_io = psutil.disk_io_counters()
-            time.sleep(0.1)
-            disk_io_new = psutil.disk_io_counters()
-            disk_io_percent = 0
-            if hasattr(disk_io, 'read_bytes') and hasattr(disk_io_new, 'read_bytes'):
-                read_diff = disk_io_new.read_bytes - disk_io.read_bytes
-                write_diff = disk_io_new.write_bytes - disk_io.write_bytes
-                # 简单估算I/O使用率，实际应根据系统磁盘性能调整基准值
-                disk_io_percent = min(100.0, (read_diff + write_diff) / (10 * 1024 * 1024) * 100)
-
-            # 记录资源使用情况
-            # log.info(f"系统资源监控 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
-
-            # 检查是否超过阈值
-            if cpu_percent > CPU_THRESHOLD or memory_percent > MEMORY_THRESHOLD or disk_io_percent > DISK_IO_THRESHOLD:
-                if not SYSTEM_OVERLOADED:
-                    SYSTEM_OVERLOADED = True
-                    log.warning(
-                        f"系统负载过高 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
-            else:
-                if SYSTEM_OVERLOADED:
-                    SYSTEM_OVERLOADED = False
-                    log.info(
-                        f"系统负载恢复正常 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
-
-            # 等待下一次监控
-            time.sleep(MONITOR_INTERVAL)
-        except Exception as e:
-            log.exception(f"系统监控异常: {e}")
-            time.sleep(MONITOR_INTERVAL)
-
+    await on_new_link(event, bot_client, user_client, system_overloaded=SYSTEM_OVERLOADED, bot_token=BOT_TOKEN)
 
 # 6. 主函数定义
 async def main():
 
     # 客户端初始化
     log.info("启动机器人")
-    await bot_client.start(bot_token=BOT_TOKEN)
+    await bot_client.start()
     await user_client.start()
     
     # 获取机器人的用户信息
@@ -171,13 +125,32 @@ async def main():
     ))
     log.info(f"已启动自动检查交易状态的定时任务，间隔 {TRANSACTION_CHECK_INTERVAL} 秒")
 
+    # 创建一个可变的系统过载标志（使用列表作为可变引用）
+    system_overloaded_ref = [SYSTEM_OVERLOADED]
+    
     # 启动系统资源监控线程
-    monitor_thread = threading.Thread(target=monitor_system_resources, daemon=True)
-    monitor_thread.start()
-    log.info("已启动系统资源监控线程")
+    start_system_monitor(
+        cpu_threshold=CPU_THRESHOLD,
+        memory_threshold=MEMORY_THRESHOLD,
+        disk_io_threshold=DISK_IO_THRESHOLD,
+        monitor_interval=MONITOR_INTERVAL,
+        system_overloaded_var=system_overloaded_ref
+    )
+    
+    # 更新全局过载标志的监控钩子
+    def update_global_overloaded():
+        global SYSTEM_OVERLOADED
+        while True:
+            SYSTEM_OVERLOADED = system_overloaded_ref[0]
+            time.sleep(1)
+    
+    # 启动全局变量更新线程
+    update_thread = threading.Thread(target=update_global_overloaded, daemon=True)
+    update_thread.start()
     
     # 启动并等待两个客户端断开连接
     await bot_client.run_until_disconnected()  # 运行 BOT_SESSION
+    await user_client.run_until_disconnected()  # 运行 USER_SESSION
 
 
 # 7. 程序入口

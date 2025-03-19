@@ -11,15 +11,13 @@ from .message_processor import (
     resolve_chat_id
 )
 
-from .payment_handler import (
-    generate_unique_amount,
-    create_new_order,
-    format_payment_instructions
-)
-
 from .task_scheduler import (
     schedule_transaction_checker,
     schedule_quota_reset,
     notify_user_order_completed,
     check_trc20_transaction
+)
+
+from .system_monitor import (
+    start_system_monitor
 ) 

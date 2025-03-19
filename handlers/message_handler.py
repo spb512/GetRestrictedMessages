@@ -1,17 +1,17 @@
-import logging
 import asyncio
+import logging
 import os
 import tempfile
-import urllib.parse
 import time
+import urllib.parse
+
 from telethon import events, utils
 from telethon.errors import ChannelPrivateError
 from telethon.tl.types import MessageMediaDocument, PeerChannel, Message, MessageMediaPhoto, InputMediaUploadedPhoto, \
     InputMediaUploadedDocument
 
 from db import (
-    get_user_quota, decrease_user_quota, get_db_connection, 
-    save_message_relation, save_media_group_relations, 
+    get_user_quota, decrease_user_quota, save_message_relation, save_media_group_relations,
     find_forwarded_message, find_forwarded_message_for_one, find_grouped_messages
 )
 

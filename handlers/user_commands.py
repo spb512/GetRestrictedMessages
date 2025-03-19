@@ -1,15 +1,14 @@
 import logging
-from telethon import events
-from telethon.tl.custom import Button
 
-from db import (
-    get_db_connection, get_user_quota, process_invite, 
-    get_user_invite_code, get_invite_stats,
-    get_order_by_id
-)
+from telethon.tl.custom import Button
 
 # 获取全局变量
 from config import USDT_WALLET
+from db import (
+    get_db_connection, get_user_quota, process_invite,
+    get_user_invite_code, get_invite_stats,
+    get_order_by_id
+)
 
 # 初始化日志记录器
 log = logging.getLogger("UserCommands")

@@ -3,7 +3,6 @@
 """
 
 import logging
-from datetime import datetime
 
 from config import RANGE
 from db import (

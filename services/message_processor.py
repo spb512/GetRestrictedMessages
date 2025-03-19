@@ -2,21 +2,17 @@
 消息处理模块 - 负责处理和转发消息
 """
 
-import asyncio
 import logging
-import re
-from typing import List, Dict, Tuple, Union, Set, Optional
 
-from telethon import events
+from telethon.tl.functions.messages import ForwardMessagesRequest
 from telethon.tl.types import (
     MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage,
     MessageMediaGeo, MessageMediaContact, MessageMediaPoll,
     MessageMediaGame, MessageMediaDice, MessageMediaUnsupported,
-    Message, PeerUser, PeerChannel, PeerChat
+    PeerUser, PeerChannel, PeerChat
 )
-from telethon.tl.functions.messages import ForwardMessagesRequest
 
-from services.user_manager import use_quota, check_user_quota
+from services.user_manager import check_user_quota
 
 # 初始化日志记录器
 log = logging.getLogger("MessageProcessor")
@@ -38,13 +34,11 @@ UNSUPPORTED_MEDIA_TYPES = (
     MessageMediaUnsupported
 )
 
-async def process_message(event, client, user_client):
+async def process_message(event):
     """
     处理接收到的消息并决定是否转发
     
     :param event: 消息事件
-    :param client: 机器人客户端
-    :param user_client: 用户客户端
     :return: 处理结果
     """
     # 确保是私聊消息
@@ -54,13 +48,6 @@ async def process_message(event, client, user_client):
     # 获取发送者信息
     sender = await event.get_sender()
     user_id = sender.id
-    
-    # 检查消息是否包含媒体
-    message = event.message
-    has_media = message.media is not None
-    
-    # 检查消息是否为转发消息
-    is_forwarded = message.forward is not None
     
     # 检查用户配额
     paid_quota, free_quota = await check_user_quota(user_id)
