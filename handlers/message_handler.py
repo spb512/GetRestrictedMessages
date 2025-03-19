@@ -397,6 +397,44 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
     text = event.text
     if not text:
         return
+    
+    # 检查是否是邀请链接 (t.me/joinchat/ 或 t.me/+)
+    if "t.me/joinchat/" in text or "t.me/+" in text:
+        try:
+            # 尝试通过用户客户端加入群组或频道
+            result = await user_client.get_entity(text)
+            # 如果成功获取实体，说明已经成功加入或已经是成员
+            await event.reply("已成功加入该群组/频道！现在请发送你需要转发的消息链接。")
+            return
+        except ChannelPrivateError:
+            # 私有频道无法访问
+            await event.reply("加入失败：此群组/频道仍然无法访问。请联系管理员手动加入。")
+            return
+        except ValueError as e:
+            # 链接格式错误
+            if "No user has" in str(e):
+                await event.reply("加入失败：邀请链接已失效或已过期")
+            else:
+                await event.reply("加入失败：邀请链接格式错误")
+            return
+        except Exception as e:
+            error_message = str(e).lower()
+            log.exception(f"加入群组/频道失败: {e}")
+            
+            if "wait" in error_message or "flood" in error_message:
+                # 频率限制
+                await event.reply("加入失败：操作过于频繁，请稍后再试")
+            elif "join" in error_message and "request" in error_message:
+                # 需要管理员批准
+                await event.reply("已发送入群申请，等待管理员批准。请过段时间再发送消息链接。")
+            elif "bot" in error_message or "captcha" in error_message or "verify" in error_message:
+                # 可能需要机器人验证
+                await event.reply("加入请求已发送，但可能需要完成验证。请联系管理员手动加入。")
+            else:
+                # 其他错误
+                await event.reply(f"加入群组/频道失败,请联系管理员。")
+            return
+    
     # 检查消息是否包含有效的Telegram链接
     if not text.startswith(("https://t.me", "http://t.me")):
         return
@@ -446,7 +484,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
             if is_thread:
                 await event.reply("请先发送频道里任意一条消息的链接，再发送评论区消息的链接")
             else:
-                await event.reply("私人频道/私人群组，请先邀请中转用户 @gsix618 进群。")
+                await event.reply("私人频道/私人群组，请先发送入群邀请链接，然后再发送消息链接。")
             # 解锁用户，允许发送新请求
             USER_LOCKS[user_id] = False
             return
