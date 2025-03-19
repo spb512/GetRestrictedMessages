@@ -12,9 +12,3 @@ from .task_scheduler import (
     notify_user_order_completed,
     check_trc20_transaction
 )
-from .user_manager import (
-    check_user_quota,
-    get_user_info,
-    add_user_quota,
-    use_quota
-)
