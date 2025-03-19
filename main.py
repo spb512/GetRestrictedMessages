@@ -32,9 +32,6 @@ from services import (
 
 log = logging.getLogger("TelethonSnippets")
 
-# 定义系统过载标志
-SYSTEM_OVERLOADED = False
-
 # 创建共享的系统过载状态变量
 system_overloaded_ref = Value('b', False)  # 'b' 表示布尔值
 
@@ -101,14 +98,11 @@ async def message_handler(event):
     if not is_authorized(event):
         return
     # 调用链接处理函数
-    await on_new_link(event, bot_client, user_client, system_overloaded=SYSTEM_OVERLOADED, bot_token=BOT_TOKEN)
+    await on_new_link(event, bot_client, user_client, system_overloaded=system_overloaded_ref.value, bot_token=BOT_TOKEN)
 
 
 # 6. 主函数定义
 async def main():
-    # 声明全局变量
-    global SYSTEM_OVERLOADED
-
     # 客户端初始化
     log.info("启动机器人")
     await bot_client.connect()
@@ -142,17 +136,6 @@ async def main():
         monitor_interval=MONITOR_INTERVAL,
         system_overloaded_var=system_overloaded_ref
     )
-
-    # 更新全局过载标志的监控钩子
-    def update_global_overloaded():
-        global SYSTEM_OVERLOADED
-        while True:
-            SYSTEM_OVERLOADED = bool(system_overloaded_ref.value)
-            time.sleep(3)
-
-    # 启动全局变量更新线程
-    update_thread = threading.Thread(target=update_global_overloaded, daemon=True)
-    update_thread.start()
 
     # 启动并等待两个客户端断开连接
     await bot_client.run_until_disconnected()  # 运行 BOT_SESSION
