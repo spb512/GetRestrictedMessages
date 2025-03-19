@@ -7,26 +7,26 @@ import asyncio
 import logging
 import threading
 import time
-
 import psutil
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
+from multiprocessing import Value
 
-# 导入数据库模块
-from db import (
-    init_db, get_db_connection
-)
-from handlers import (
-    cmd_start, cmd_user, cmd_buy, cmd_check, cmd_invite, callback_handler,cmd_invite_code, on_new_link
-)
+from telethon import TelegramClient, events
+from telethon.events import NewMessage, CallbackQuery
+from telethon.sessions import StringSession
 
 from config import (
     API_ID, API_HASH, BOT_SESSION, USER_SESSION, BOT_TOKEN,
     is_authorized,
-    SYSTEM_OVERLOADED, CPU_THRESHOLD, MEMORY_THRESHOLD, DISK_IO_THRESHOLD,
+    CPU_THRESHOLD, MEMORY_THRESHOLD, DISK_IO_THRESHOLD,
     MONITOR_INTERVAL, TRANSACTION_CHECK_INTERVAL, TRONGRID_API_KEY, USDT_CONTRACT
 )
-
+# 导入数据库模块
+from db import (
+    init_db
+)
+from handlers import (
+    cmd_start, cmd_user, cmd_buy, cmd_check, cmd_invite, callback_handler, cmd_invite_code, on_new_link
+)
 from services import (
     schedule_transaction_checker, schedule_quota_reset, start_system_monitor
 )
@@ -39,6 +39,12 @@ log = logging.getLogger("TelethonSnippets")
 # 设置Telethon 内部日志级别，减少日志输出
 logging.getLogger('telethon').setLevel(logging.WARNING)
 
+# 定义系统过载标志
+SYSTEM_OVERLOADED = False
+
+# 创建共享的系统过载状态变量
+system_overloaded_ref = Value('b', False)  # 'b' 表示布尔值
+
 # 初始化数据库
 init_db()
 
@@ -47,50 +53,50 @@ user_client = TelegramClient(StringSession(USER_SESSION), API_ID, API_HASH, prox
 
 
 # 注册命令处理器
-@bot_client.on(events.NewMessage(pattern='/start'))
+@bot_client.on(NewMessage(pattern='/start'))
 async def start_handler(event):
     if not is_authorized(event):
         return
     await cmd_start(event, bot_client)
 
-@bot_client.on(events.NewMessage(pattern='/user'))
+@bot_client.on(NewMessage(pattern='/user'))
 async def user_handler(event):
     if not is_authorized(event):
         return
     await cmd_user(event)
 
-@bot_client.on(events.NewMessage(pattern='/buy'))
+@bot_client.on(NewMessage(pattern='/buy'))
 async def buy_handler(event):
     if not is_authorized(event):
         return
     await cmd_buy(event)
 
-@bot_client.on(events.NewMessage(pattern='/check'))
+@bot_client.on(NewMessage(pattern='/check'))
 async def check_handler(event):
     if not is_authorized(event):
         return
     await cmd_check(event)
 
-@bot_client.on(events.NewMessage(pattern='/invite'))
+@bot_client.on(NewMessage(pattern='/invite'))
 async def invite_handler(event):
     if not is_authorized(event):
         return
     await cmd_invite(event, bot_client)
 
-@bot_client.on(events.NewMessage(pattern='/invite_code'))
+@bot_client.on(NewMessage(pattern='/invite_code'))
 async def invite_code_handler(event):
     if not is_authorized(event):
         return
     await cmd_invite_code(event, bot_client)
 
 # 注册回调处理器
-@bot_client.on(events.CallbackQuery())
+@bot_client.on(CallbackQuery())
 async def callback_query_handler(event):
     # 执行回调处理
     await callback_handler(event, bot_client)
 
 # 注册消息处理器
-@bot_client.on(events.NewMessage)
+@bot_client.on(NewMessage)
 async def message_handler(event):
     if not is_authorized(event):
         return
@@ -99,11 +105,13 @@ async def message_handler(event):
 
 # 6. 主函数定义
 async def main():
-
+    # 声明全局变量
+    global SYSTEM_OVERLOADED
+    
     # 客户端初始化
     log.info("启动机器人")
-    await bot_client.start()
-    await user_client.start()
+    await bot_client.connect()
+    await user_client.connect()
     
     # 获取机器人的用户信息
     ubot_self = await bot_client.get_me()
@@ -124,9 +132,6 @@ async def main():
         usdt_contract=USDT_CONTRACT
     ))
     log.info(f"已启动自动检查交易状态的定时任务，间隔 {TRANSACTION_CHECK_INTERVAL} 秒")
-
-    # 创建一个可变的系统过载标志（使用列表作为可变引用）
-    system_overloaded_ref = [SYSTEM_OVERLOADED]
     
     # 启动系统资源监控线程
     start_system_monitor(
@@ -141,7 +146,7 @@ async def main():
     def update_global_overloaded():
         global SYSTEM_OVERLOADED
         while True:
-            SYSTEM_OVERLOADED = system_overloaded_ref[0]
+            SYSTEM_OVERLOADED = bool(system_overloaded_ref.value)
             time.sleep(1)
     
     # 启动全局变量更新线程

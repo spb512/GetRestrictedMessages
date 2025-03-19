@@ -18,7 +18,7 @@ def monitor_system_resources(cpu_threshold, memory_threshold, disk_io_threshold,
     :param memory_threshold: 内存使用率阈值(百分比)
     :param disk_io_threshold: 磁盘I/O使用率阈值(百分比)
     :param monitor_interval: 监控间隔时间(秒)
-    :param system_overloaded_var: 系统过载标志变量的引用
+    :param system_overloaded_var: 系统过载标志变量，multiprocessing.Value类型
     """
     while True:
         try:
@@ -43,17 +43,21 @@ def monitor_system_resources(cpu_threshold, memory_threshold, disk_io_threshold,
             # log.info(f"系统资源监控 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
 
             # 检查是否超过阈值
-            if (cpu_percent > cpu_threshold or 
+            current_overloaded = bool(system_overloaded_var.value)
+            is_overloaded = (cpu_percent > cpu_threshold or 
                 memory_percent > memory_threshold or 
-                disk_io_percent > disk_io_threshold):
+                disk_io_percent > disk_io_threshold)
                 
-                if not system_overloaded_var[0]:
-                    system_overloaded_var[0] = True
+            # 只在状态变化时记录日志和更新值
+            if is_overloaded != current_overloaded:
+                # 获取锁并更新值
+                with system_overloaded_var.get_lock():
+                    system_overloaded_var.value = is_overloaded
+                
+                if is_overloaded:
                     log.warning(
                         f"系统负载过高 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
-            else:
-                if system_overloaded_var[0]:
-                    system_overloaded_var[0] = False
+                else:
                     log.info(
                         f"系统负载恢复正常 - CPU: {cpu_percent}%, 内存: {memory_percent}%, 磁盘I/O: {disk_io_percent}%")
 
@@ -72,7 +76,7 @@ def start_system_monitor(cpu_threshold, memory_threshold, disk_io_threshold,
     :param memory_threshold: 内存使用率阈值(百分比)
     :param disk_io_threshold: 磁盘I/O使用率阈值(百分比)
     :param monitor_interval: 监控间隔时间(秒)
-    :param system_overloaded_var: 系统过载标志变量的引用
+    :param system_overloaded_var: 系统过载标志变量，multiprocessing.Value类型
     :return: 监控线程
     """
     import threading
