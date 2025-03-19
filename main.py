@@ -30,13 +30,7 @@ from services import (
     schedule_transaction_checker, schedule_quota_reset, start_system_monitor
 )
 
-# 初始化日志记录器
-logging.basicConfig(
-    level=logging.INFO, format="[%(levelname)s] %(asctime)s - %(message)s"
-)
 log = logging.getLogger("TelethonSnippets")
-# 设置Telethon 内部日志级别，减少日志输出
-logging.getLogger('telethon').setLevel(logging.WARNING)
 
 # 定义系统过载标志
 SYSTEM_OVERLOADED = False
@@ -154,7 +148,7 @@ async def main():
         global SYSTEM_OVERLOADED
         while True:
             SYSTEM_OVERLOADED = bool(system_overloaded_ref.value)
-            time.sleep(1)
+            time.sleep(3)
 
     # 启动全局变量更新线程
     update_thread = threading.Thread(target=update_global_overloaded, daemon=True)
