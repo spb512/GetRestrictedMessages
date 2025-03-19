@@ -7,10 +7,9 @@ import asyncio
 import logging
 import threading
 import time
-import psutil
 from multiprocessing import Value
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient
 from telethon.events import NewMessage, CallbackQuery
 from telethon.sessions import StringSession
 
@@ -96,7 +95,7 @@ async def callback_query_handler(event):
     await callback_handler(event, bot_client)
 
 # 注册消息处理器
-@bot_client.on(NewMessage)
+@bot_client.on(NewMessage())
 async def message_handler(event):
     if not is_authorized(event):
         return
