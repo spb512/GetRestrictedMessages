@@ -5,8 +5,6 @@ Telethon 消息转发机器人
 # 1. 导入模块
 import asyncio
 import logging
-import threading
-import time
 from multiprocessing import Value
 
 from telethon import TelegramClient
