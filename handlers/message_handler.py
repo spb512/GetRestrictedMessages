@@ -4,6 +4,7 @@ import os
 import tempfile
 import time
 import urllib.parse
+import aiohttp  # 添加 aiohttp 依赖
 
 from telethon import events, utils
 from telethon.errors import ChannelPrivateError, InviteHashInvalidError, UserAlreadyParticipantError, \
@@ -50,16 +51,18 @@ async def replace_message(message: Message, bot_token):
         message_id = message.fwd_from.channel_post
         url = f"https://api.telegram.org/bot{bot_token}/getChat"
         req_params = {"chat_id": peer_id}
-        import requests
-        result = requests.get(url, params=req_params)
-        peer_type = "channel"
-        channel_username = None
-        if result and result.json().get("ok"):
-            channel = result.json().get("result")
-            peer_type = channel.get("type", "channel")
-            channel_username = channel.get("username")
-        if peer_type == "channel" and channel_username:
-            return channel_username, message_id
+        
+        # 使用异步请求替代同步请求
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=req_params) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    if result and result.get("ok"):
+                        channel = result.get("result")
+                        peer_type = channel.get("type", "channel")
+                        channel_username = channel.get("username")
+                        if peer_type == "channel" and channel_username:
+                            return channel_username, message_id
     return None
 
 

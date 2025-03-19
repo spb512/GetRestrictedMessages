@@ -3,3 +3,4 @@ telethon
 requests
 psutil
 python-socks
+aiohttp

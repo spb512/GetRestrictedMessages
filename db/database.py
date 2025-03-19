@@ -68,9 +68,8 @@ def init_db():
         ''')
 
         # 创建邀请关系表
-        cursor.execute('DROP TABLE IF EXISTS invite_relations')
         cursor.execute('''
-        CREATE TABLE invite_relations (
+        CREATE TABLE IF NOT EXISTS invite_relations (
             inviter_id TEXT NOT NULL,
             invitee_id TEXT,
             invite_code TEXT NOT NULL,
