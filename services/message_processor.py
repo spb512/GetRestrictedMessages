@@ -12,7 +12,7 @@ from telethon.tl.types import (
     PeerUser, PeerChannel, PeerChat
 )
 
-from services.user_manager import check_user_quota
+from db import get_user_quota
 
 # 初始化日志记录器
 log = logging.getLogger("MessageProcessor")
@@ -51,7 +51,7 @@ async def process_message(event):
     user_id = sender.id
 
     # 检查用户配额
-    paid_quota, free_quota = await check_user_quota(user_id)
+    paid_quota, free_quota = await get_user_quota(user_id)
     total_quota = paid_quota + free_quota
 
     # 如果用户没有配额，则提醒并返回
