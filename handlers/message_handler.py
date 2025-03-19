@@ -157,7 +157,7 @@ async def group_forward_message(event, grouped_messages, bot_client):
     await process_forward_quota(event)
 
 
-async def get_media_group_messages(initial_message, message_id, peer, client: PeerChannel) -> list:
+async def get_media_group_messages(initial_message, message_id, peer, client) -> list:
     media_group = [initial_message]
     grouped_id = initial_message.grouped_id
     if not grouped_id:
