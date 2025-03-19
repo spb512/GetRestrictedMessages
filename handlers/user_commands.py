@@ -34,8 +34,8 @@ async def cmd_start(event, bot_client):
                     int(inviter_id),
                     f"🎉 您的好友 @{event.sender.username if event.sender.username else f'用户{event.sender_id}'} 已通过您的邀请链接加入！\n您已获得5次付费转发次数奖励！立即查看 /user"
                 )
-            except:
-                pass
+            except Exception as e:
+                log.exception(f"通知邀请人失败: {e}")
 
             # 直接显示使用方法
             usage_text = """🤖 使用方法 🤖
@@ -235,8 +235,8 @@ async def cmd_invite_code(event, bot_client):
                 int(inviter_id),
                 f"🎉 您的好友 @{event.sender.username if event.sender.username else f'用户{event.sender_id}'} 已使用您的邀请码！\n您已获得5次付费转发次数奖励！"
             )
-        except:
-            pass
+        except Exception as e:
+            log.exception(f"通知邀请人失败: {e}")
 
         # 直接显示使用方法
         usage_text = """🤖 使用方法 🤖
