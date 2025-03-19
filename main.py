@@ -6,13 +6,10 @@ Telethon 消息转发机器人
 import asyncio
 import logging
 import os
-import random
-import sqlite3
 import tempfile
 import threading
 import time
 import urllib.parse
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 import psutil
@@ -26,6 +23,16 @@ from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault, Channel
 from telethon.tl.types import MessageMediaDocument, PeerChannel, Message, MessageMediaPhoto, InputMediaUploadedPhoto, \
     InputMediaUploadedDocument
+
+# 导入数据库模块
+from db import (
+    init_db, get_db_connection, get_user_quota, decrease_user_quota, reset_all_free_quotas,
+    update_order_tx_info, update_order_last_checked, cancel_expired_order,
+    get_all_pending_orders, create_new_order, get_order_by_id, complete_order,
+    get_user_invite_code, process_invite, get_invite_stats,
+    save_message_relation, save_media_group_relations, find_forwarded_message,
+    find_forwarded_message_for_one, find_grouped_messages
+)
 
 # 2. 全局配置与常量
 # 初始化日志记录器
@@ -56,8 +63,6 @@ TRANSACTION_CHECK_INTERVAL = config("TRANSACTION_CHECK_INTERVAL", default=60, ca
 ADMIN_ID = config("ADMIN_ID", default=None, cast=int)
 # 消息范围±10
 RANGE = 10
-# SQLite 数据库文件
-DB_FILE = "message_forward.db"
 # 附加信息
 addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\n♍[91转发|聊天👉：](https://t.me/91_zf_bot)@91_zf_group\n🔯[91转发|通知👉：](https://t.me/91_zf_channel)@91_zf_channel"
 # 按钮
@@ -147,550 +152,6 @@ def monitor_system_resources():
         except Exception as e:
             log.exception(f"系统监控异常: {e}")
             time.sleep(MONITOR_INTERVAL)
-
-
-# 数据库上下文管理器
-@contextmanager
-def get_db_connection():
-    """提供SQLite数据库连接的上下文管理器"""
-    conn = sqlite3.connect(DB_FILE)
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-# 3.数据库操作相关函数
-# 创建并初始化数据库
-def init_db():
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS message_relations (
-            source_chat_id TEXT NOT NULL,
-            source_message_id INTEGER NOT NULL,
-            target_chat_id TEXT NOT NULL,
-            target_message_id INTEGER NOT NULL,
-            grouped_id TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (source_chat_id, source_message_id, target_chat_id, grouped_id)
-        )
-        ''')
-
-        # 创建用户转发次数表
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_forward_quota (
-            user_id TEXT PRIMARY KEY,
-            free_quota INTEGER DEFAULT 5,
-            paid_quota INTEGER DEFAULT 0,
-            last_reset_date TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        ''')
-
-        # 创建订单表
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS orders (
-            order_id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            package_name TEXT NOT NULL,
-            amount REAL NOT NULL,
-            quota_amount INTEGER NOT NULL,
-            status TEXT DEFAULT 'pending',
-            payment_address TEXT NOT NULL,
-            tx_hash TEXT,
-            memo TEXT,
-            last_checked TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            completed_at TIMESTAMP
-        )
-        ''')
-
-        # 创建邀请关系表
-        cursor.execute('DROP TABLE IF EXISTS invite_relations')
-        cursor.execute('''
-        CREATE TABLE invite_relations (
-            inviter_id TEXT NOT NULL,
-            invitee_id TEXT,
-            invite_code TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (invitee_id)
-        )
-        ''')
-
-        conn.commit()
-    log.info("数据库初始化完成")
-
-
-def generate_invite_code():
-    """生成唯一的邀请码"""
-    import uuid
-    return str(uuid.uuid4())[:8].upper()
-
-
-def get_user_invite_code(user_id):
-    """获取用户的邀请码"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        # 检查用户是否已有邀请码
-        cursor.execute('SELECT invite_code FROM invite_relations WHERE inviter_id = ?', (str(user_id),))
-        result = cursor.fetchone()
-
-        if not result:
-            # 生成新的邀请码
-            invite_code = generate_invite_code()
-            cursor.execute('''
-            INSERT INTO invite_relations (inviter_id, invite_code, invitee_id)
-            VALUES (?, ?, NULL)
-            ''', (str(user_id), invite_code))
-            conn.commit()
-            return invite_code
-
-    return result[0]
-
-
-def process_invite(invite_code, invitee_id):
-    """处理邀请关系并发放奖励"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        try:
-            # 检查邀请码是否有效
-            cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
-            result = cursor.fetchone()
-
-            if not result:
-                return False, "无效的邀请码"
-
-            inviter_id = result[0]
-
-            # 检查邀请人是否已达到邀请上限
-            cursor.execute('SELECT COUNT(*) FROM invite_relations WHERE inviter_id = ? AND invitee_id IS NOT NULL',
-                           (inviter_id,))
-            invite_count = cursor.fetchone()[0]
-            if invite_count >= 20:
-                return False, "邀请人已达到20人邀请上限"
-
-            # 检查是否已经被邀请过
-            cursor.execute('SELECT inviter_id FROM invite_relations WHERE invitee_id = ?', (str(invitee_id),))
-            if cursor.fetchone():
-                return False, "您已经被其他用户邀请过了"
-
-            # 检查是否自己邀请自己
-            if str(inviter_id) == str(invitee_id):
-                return False, "不能邀请自己"
-
-            # 添加邀请关系
-            cursor.execute('''
-            INSERT INTO invite_relations (inviter_id, invitee_id, invite_code)
-            VALUES (?, ?, ?)
-            ''', (inviter_id, str(invitee_id), invite_code))
-
-            conn.commit()
-
-            # 给邀请人增加奖励次数
-            add_paid_quota(inviter_id, 5)
-
-            return True, "邀请成功！邀请人已获得5次付费转发次数"
-
-        except Exception as e:
-            log.exception(f"处理邀请失败: {e}")
-            conn.rollback()
-            return False, "处理邀请时发生错误"
-
-
-def get_invite_stats(user_id):
-    """获取用户的邀请统计信息"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        # 获取成功邀请的人数（invitee_id 不为 NULL 的记录）
-        cursor.execute('SELECT COUNT(*) FROM invite_relations WHERE inviter_id = ? AND invitee_id IS NOT NULL',
-                       (str(user_id),))
-        invite_count = cursor.fetchone()[0]
-
-        # 获取获得的奖励次数
-        cursor.execute('SELECT paid_quota FROM user_forward_quota WHERE user_id = ?', (str(user_id),))
-        result = cursor.fetchone()
-        reward_count = result[0] if result else 0
-
-    return invite_count, reward_count
-
-
-# 保存消息转发关系
-def save_message_relation(source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id=None):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-            cursor.execute('''
-            INSERT INTO message_relations 
-            (source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-            str(source_chat_id), source_message_id, str(target_chat_id), target_message_id, grouped_id, created_at))
-            conn.commit()
-        except sqlite3.IntegrityError:
-            # 如果已存在，则更新
-            created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-            cursor.execute('''
-            UPDATE message_relations 
-            SET target_message_id = ?, grouped_id = ?, created_at = ?
-            WHERE source_chat_id = ? AND source_message_id = ? AND target_chat_id = ?
-            ''', (
-            target_message_id, grouped_id, created_at, str(source_chat_id), source_message_id, str(target_chat_id)))
-            conn.commit()
-
-
-# 批量保存媒体组消息关系
-def save_media_group_relations(source_chat_id, source_messages, target_chat_id, target_messages, grouped_id=None):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            for i in range(len(source_messages)):
-                if i < len(target_messages):
-                    source_msg = source_messages[i]
-                    target_msg = target_messages[i] if isinstance(target_messages[i], Message) else target_messages
-                    created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-                    cursor.execute('''
-                    INSERT INTO message_relations 
-                    (source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id, created_at) 
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (str(source_chat_id), source_msg.id, str(target_chat_id),
-                          target_msg.id if isinstance(target_msg, Message) else target_msg,
-                          grouped_id, created_at))
-            conn.commit()
-        except Exception as e:
-            log.exception(f"保存媒体组关系失败: {e}")
-
-
-# 查找已转发的消息
-def find_forwarded_message(source_chat_id, source_message_id, target_chat_id):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-        SELECT target_message_id, grouped_id FROM message_relations
-        WHERE source_chat_id = ? AND source_message_id = ? AND target_chat_id = ? and grouped_id != 0
-        ''', (str(source_chat_id), source_message_id, str(target_chat_id)))
-        result = cursor.fetchone()
-    return result
-
-
-# 查找已转发的消息
-def find_forwarded_message_for_one(source_chat_id, source_message_id, target_chat_id):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-        SELECT target_message_id, grouped_id FROM message_relations
-        WHERE source_chat_id = ? AND source_message_id = ? AND target_chat_id = ? AND grouped_id = 0
-        ''', (str(source_chat_id), source_message_id, str(target_chat_id)))
-        result = cursor.fetchone()
-    return result
-
-
-# 查找相同组ID的所有转发消息
-def find_grouped_messages(source_chat_id, grouped_id, target_chat_id):
-    # if not grouped_id:
-    #     return []
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-        SELECT source_message_id, target_message_id FROM message_relations 
-        WHERE source_chat_id = ? AND grouped_id = ? AND target_chat_id = ?
-        ''', (str(source_chat_id), grouped_id, str(target_chat_id)))
-        results = cursor.fetchall()
-    return results
-
-
-# 用户转发次数管理相关函数
-def get_user_quota(user_id):
-    """获取用户当前的转发次数配额"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        # 检查用户是否已有记录
-        cursor.execute('SELECT free_quota, paid_quota, last_reset_date FROM user_forward_quota WHERE user_id = ?',
-                       (str(user_id),))
-        result = cursor.fetchone()
-
-        current_date = datetime.now().strftime('%Y-%m-%d')
-
-        if not result:
-            # 新用户，创建记录
-            cursor.execute(
-                'INSERT INTO user_forward_quota (user_id, free_quota, paid_quota, last_reset_date) VALUES (?, ?, ?, ?)',
-                (str(user_id), 5, 0, current_date)
-            )
-            conn.commit()
-            return 5, 0, current_date
-
-        free_quota, paid_quota, last_reset_date = result
-
-        # 检查是否需要重置免费次数（每日0点重置）
-        if last_reset_date != current_date:
-            free_quota = 5  # 重置免费次数
-            cursor.execute(
-                'UPDATE user_forward_quota SET free_quota = ?, last_reset_date = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
-                (free_quota, current_date, str(user_id))
-            )
-            conn.commit()
-
-    return free_quota, paid_quota, current_date
-
-
-def decrease_user_quota(user_id):
-    """减少用户的转发次数，优先使用免费次数"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        free_quota, paid_quota, _ = get_user_quota(user_id)
-
-        if free_quota > 0:
-            # 优先使用免费次数
-            free_quota -= 1
-            cursor.execute(
-                'UPDATE user_forward_quota SET free_quota = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
-                (free_quota, str(user_id))
-            )
-        elif paid_quota > 0:
-            # 然后使用付费次数
-            paid_quota -= 1
-            cursor.execute(
-                'UPDATE user_forward_quota SET paid_quota = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
-                (paid_quota, str(user_id))
-            )
-        else:
-            # 没有可用次数
-            return False
-
-        conn.commit()
-    return True
-
-
-def add_paid_quota(user_id, amount):
-    """为用户添加付费转发次数"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        # 确保用户记录存在
-        free_quota, paid_quota, _ = get_user_quota(user_id)
-
-        # 增加付费次数
-        paid_quota += amount
-        cursor.execute(
-            'UPDATE user_forward_quota SET paid_quota = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
-            (paid_quota, str(user_id))
-        )
-
-        conn.commit()
-    return paid_quota
-
-
-def reset_all_free_quotas():
-    """重置所有用户的免费次数"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        current_date = datetime.now().strftime('%Y-%m-%d')
-
-        # 更新所有用户的免费次数为5，并更新重置日期
-        cursor.execute('''
-        UPDATE user_forward_quota 
-        SET free_quota = 5, last_reset_date = ?, updated_at = CURRENT_TIMESTAMP
-        ''', (current_date,))
-
-        affected_rows = cursor.rowcount
-        conn.commit()
-
-    log.info(f"已重置 {affected_rows} 个用户的免费转发次数")
-    return affected_rows
-
-
-# 订单管理相关函数
-def generate_order_id():
-    """生成唯一的订单ID"""
-    import uuid
-    return f"ORD-{str(uuid.uuid4())[:8].upper()}"
-
-
-def update_order_tx_info(order_id, tx_hash, memo=""):
-    """更新订单的交易哈希和备注"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        try:
-            updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute('''
-            UPDATE orders 
-            SET tx_hash = ?, memo = ?, updated_at = ? 
-            WHERE order_id = ?
-            ''', (tx_hash, memo, updated_at, order_id))
-
-            conn.commit()
-        except Exception as e:
-            log.exception(f"更新订单交易信息失败: {e}")
-
-
-def update_order_last_checked(order_id):
-    """更新订单最后检查时间"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        try:
-            last_checked = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute('''
-            UPDATE orders 
-            SET last_checked = ?, updated_at = ? 
-            WHERE order_id = ?
-            ''', (last_checked, last_checked, order_id))
-
-            conn.commit()
-        except Exception as e:
-            log.exception(f"更新订单最后检查时间失败: {e}")
-
-
-def cancel_expired_order(order_id):
-    """取消超时未支付的订单"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        try:
-            # 获取订单信息以记录日志
-            cursor.execute('SELECT user_id, package_name, amount FROM orders WHERE order_id = ? AND status = "pending"',
-                           (order_id,))
-            order = cursor.fetchone()
-
-            if not order:
-                # 订单不存在或已经不是pending状态
-                return False
-
-            user_id, package_name, amount = order
-
-            # 更新订单状态为已取消
-            cancelled_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute('''
-            UPDATE orders 
-            SET status = "cancelled", updated_at = ? 
-            WHERE order_id = ?
-            ''', (cancelled_at, order_id))
-
-            conn.commit()
-            log.info(f"订单 {order_id} 因超时未支付已自动取消，用户: {user_id}, 套餐: {package_name}, 金额: {amount}$")
-            return True
-        except Exception as e:
-            log.exception(f"取消订单失败: {e}")
-            conn.rollback()
-            return False
-
-
-def get_all_pending_orders():
-    """获取所有待处理的订单"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        cursor.execute('SELECT * FROM orders WHERE status = "pending" ORDER BY created_at ASC')
-        orders = cursor.fetchall()
-
-    return orders
-
-
-def create_new_order(user_id, package_name, amount, quota_amount):
-    """创建新订单，并生成独特的金额"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        order_id = generate_order_id()
-        created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        # 为订单生成独特金额：基础金额 + 0.00001-0.00099的随机小数（更小的随机值）
-        unique_cents = random.randint(1, 99) / 100000
-        unique_amount = round(amount + unique_cents, 5)  # 保留5位小数
-
-        try:
-            cursor.execute('''
-            INSERT INTO orders 
-            (order_id, user_id, package_name, amount, quota_amount, payment_address, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-            order_id, str(user_id), package_name, unique_amount, quota_amount, USDT_WALLET, created_at, created_at))
-
-            conn.commit()
-            log.info(f"为用户 {user_id} 创建了新订单 {order_id}，金额: {unique_amount}$")
-            return order_id, unique_amount
-        except Exception as e:
-            log.exception(f"创建订单失败: {e}")
-            return None, None
-
-
-def get_order_by_id(order_id):
-    """通过订单ID获取订单信息"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        cursor.execute('SELECT * FROM orders WHERE order_id = ?', (order_id,))
-        order = cursor.fetchone()
-
-    return order
-
-
-def get_user_pending_orders(user_id):
-    """获取用户的未完成订单"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        cursor.execute('SELECT * FROM orders WHERE user_id = ? AND status = "pending" ORDER BY created_at DESC',
-                       (str(user_id),))
-        orders = cursor.fetchall()
-
-    return orders
-
-
-def complete_order(order_id, tx_hash=None):
-    """完成订单并增加用户次数"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        try:
-            # 获取订单信息
-            cursor.execute('SELECT user_id, quota_amount, status FROM orders WHERE order_id = ?', (order_id,))
-            order = cursor.fetchone()
-
-            if not order:
-                log.error(f"找不到订单 {order_id}")
-                return False
-
-            user_id, quota_amount, status = order
-
-            if status != "pending":
-                log.warning(f"订单 {order_id} 已处理过，当前状态: {status}")
-                return False
-
-            # 更新订单状态
-            completed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            if tx_hash:
-                cursor.execute('''
-                UPDATE orders 
-                SET status = "completed", tx_hash = ?, updated_at = ?, completed_at = ? 
-                WHERE order_id = ?
-                ''', (tx_hash, completed_at, completed_at, order_id))
-            else:
-                cursor.execute('''
-                UPDATE orders 
-                SET status = "completed", updated_at = ?, completed_at = ? 
-                WHERE order_id = ?
-                ''', (completed_at, completed_at, order_id))
-            conn.commit()
-            # 增加用户次数
-            add_paid_quota(user_id, quota_amount)
-            log.info(f"订单 {order_id} 已完成，为用户 {user_id} 增加了 {quota_amount} 次付费转发次数")
-            return True
-        except Exception as e:
-            log.exception(f"完成订单失败: {e}")
-            conn.rollback()
-            return False
 
 
 async def check_trc20_transaction(order_id, wallet_address, expected_amount=None):
@@ -1009,9 +470,16 @@ async def group_forward_message(event, grouped_messages):
     target_ids = [target_id for _, target_id in grouped_messages]
     messages = await bot_client.get_messages(PeerChannel(PRIVATE_CHAT_ID), ids=target_ids)
     media_files = [msg.media for msg in messages if msg.media]
-    caption = messages[0].text
-    # 按钮信息追加到原 caption 后面
-    await bot_client.send_file(event.chat_id, media_files, caption=caption + addInfo, reply_to=event.message.id)
+    # 检查媒体组中是否有文档类型的媒体
+    has_document = any(isinstance(msg.media, MessageMediaDocument) for msg in messages if msg.media)
+    if has_document:
+        media_captions = [msg.text if msg.text else "" for msg in messages]
+        media_captions[-1] = media_captions[-1] + addInfo  # 只在最后一个媒体添加caption和附加信息
+        await bot_client.send_file(event.chat_id, media_files, caption=media_captions, reply_to=event.message.id)
+    else:
+        caption = messages[0].text
+        # 按钮信息追加到原 caption 后面
+        await bot_client.send_file(event.chat_id, media_files, caption=caption + addInfo, reply_to=event.message.id)
     # 处理转发次数并发送提示消息
     await process_forward_quota(event)
 
@@ -1671,11 +1139,10 @@ async def cmd_start(event):
         success, message = process_invite(invite_code, event.sender_id)
         if success:
             # 获取邀请人信息
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
-            inviter_id = cursor.fetchone()[0]
-            conn.close()
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
+                inviter_id = cursor.fetchone()[0]
 
             # 获取邀请人用户名
             try:
@@ -1884,11 +1351,10 @@ async def cmd_invite_code(event):
 
     if success:
         # 获取邀请人信息
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
-        inviter_id = cursor.fetchone()[0]
-        conn.close()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT inviter_id FROM invite_relations WHERE invite_code = ?', (invite_code,))
+            inviter_id = cursor.fetchone()[0]
 
         # 获取邀请人用户名
         try:
