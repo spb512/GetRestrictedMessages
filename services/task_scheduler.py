@@ -82,7 +82,7 @@ async def check_trc20_transaction(order_id, wallet_address, bot_client, trongrid
         params = {
             "limit": 20,  # 限制最近的20条交易
             "contract_address": usdt_contract,  # USDT合约地址
-            "only_confirmed": True
+            "only_confirmed": "true"
         }
 
         # 获取代理设置
