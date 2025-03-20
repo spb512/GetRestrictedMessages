@@ -4,6 +4,8 @@ import os
 import tempfile
 import time
 import urllib.parse
+import aiofiles
+import aiofiles.os
 
 from decouple import config
 from telethon import TelegramClient, events
@@ -54,6 +56,26 @@ except Exception as e:
     log.exception("启动客户端失败")
     log.exception(f"Error: {e}")
     exit(1)
+
+
+# 在配置加载时解析授权用户列表
+AUTH_USERS = set()
+if AUTHS:
+    try:
+        # 解析授权用户字符串，支持整数和 @username
+        AUTH_USERS = set(int(x) if x.isdigit() else x for x in AUTHS.split())
+    except ValueError:
+        log.error("AUTHS 配置中包含无效的用户格式，确保是 user_id 或 username")
+        exit(1)
+
+
+# 创建临时文件的异步函数
+async def create_temp_file(suffix=""):
+    """创建临时文件的异步封装"""
+    temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    temp_name = temp_file.name
+    temp_file.close()
+    return temp_name
 
 
 # 定义处理新消息的函数
@@ -180,7 +202,7 @@ async def handle_single_message(event: events.NewMessage.Event, message) -> None
                 await client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
                                        attributes=message.media.document.attributes, thumb=thumb_path,
                                        force_document=force_document)
-                os.remove(thumb_path)  # 发送后删除缩略图
+                await aiofiles.os.remove(thumb_path)  # 发送后删除缩略图
             elif isinstance(message.media, MessageMediaDocument) and message.media.document.mime_type == 'audio/mpeg':
                 await client.send_file(event.chat_id, file_path, caption=message.text, reply_to=event.message.id,
                                        attributes=message.media.document.attributes,
@@ -189,7 +211,7 @@ async def handle_single_message(event: events.NewMessage.Event, message) -> None
                 await client.send_file(event.chat_id, file_path, caption=message.text, nosound_video=True,
                                        reply_to=event.message.id,
                                        force_document=force_document)
-            os.remove(file_path)  # 发送后删除文件
+            await aiofiles.os.remove(file_path)  # 发送后删除文件
         else:
             await client.send_message(event.chat_id, message.text, reply_to=event.message.id)
         # 删除提示消息
@@ -226,19 +248,19 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
     # 为临时文件添加扩展名
     suffix = ".jpg" if isinstance(msg.media,
                                   MessageMediaPhoto) else ".mp4" if "video/mp4" in msg.media.document.mime_type else ""
-    temp_file = None
+    temp_name = None
     thumb_path = None
     file_path = None
     try:
-        temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        file_path = await client.download_media(msg, file=temp_file.name)
+        temp_name = await create_temp_file(suffix=suffix)
+        file_path = await client.download_media(msg, file=temp_name)
         if isinstance(msg.media, MessageMediaPhoto):
             return InputMediaUploadedPhoto(file=await client.upload_file(file_path))
         elif isinstance(msg.media, MessageMediaDocument):
             if (msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024) or (
                     msg.media.document.mime_type == "image/heic"):
                 thumb_path = await client.download_media(
-                    msg, file=f"{temp_file.name}_thumb.jpg", thumb=-1
+                    msg, file=f"{temp_name}_thumb.jpg", thumb=-1
                 )
             # 对于文档类型，返回带有特殊标记的对象，以便后续处理
             return InputMediaUploadedDocument(
@@ -250,12 +272,12 @@ async def prepare_album_file(msg: Message, client: TelegramClient):
             )
     finally:
         # 删除临时文件
-        if temp_file:
-            temp_file.close()
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        if thumb_path:
-            os.remove(thumb_path)
+        if file_path and os.path.exists(file_path):
+            await aiofiles.os.remove(file_path)
+        if thumb_path and os.path.exists(thumb_path):
+            await aiofiles.os.remove(thumb_path)
+        if temp_name and os.path.exists(temp_name):
+            await aiofiles.os.remove(temp_name)
 
 
 async def get_media_group_messages(initial_message, message_id, peer) -> list:
@@ -282,17 +304,6 @@ async def get_media_group_messages(initial_message, message_id, peer) -> list:
         log.exception(f"Error: {e}")
 
     return media_group
-
-
-# 在配置加载时解析授权用户列表
-AUTH_USERS = set()
-if AUTHS:
-    try:
-        # 解析授权用户字符串，支持整数和 @username
-        AUTH_USERS = set(int(x) if x.isdigit() else x for x in AUTHS.split())
-    except ValueError:
-        log.error("AUTHS 配置中包含无效的用户格式，确保是 user_id 或 username")
-        exit(1)
 
 
 # 添加事件处理器

@@ -7,6 +7,9 @@ import urllib.parse
 
 import requests
 import aiohttp
+import aiofiles
+import aiofiles.os
+from aiohttp_socks import ProxyConnector
 from telethon import events, utils
 from telethon.errors import ChannelPrivateError, InviteHashInvalidError, UserAlreadyParticipantError, \
     UserBannedInChannelError, InviteRequestSentError, UserRestrictedError, InviteHashExpiredError, FloodWaitError
@@ -30,6 +33,14 @@ addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\
 
 # 用户锁定字典，防止并发请求
 USER_LOCKS = {}
+
+
+async def create_temp_file(suffix=""):
+    """创建临时文件的异步封装"""
+    temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    temp_name = temp_file.name
+    temp_file.close()
+    return temp_name
 
 
 async def process_forward_quota(event):
@@ -94,20 +105,20 @@ async def prepare_album_file(msg: Message, user_client, bot_client):
     # 为临时文件添加扩展名
     suffix = ".jpg" if isinstance(msg.media,
                                   MessageMediaPhoto) else ".mp4" if "video/mp4" in msg.media.document.mime_type else ""
-    temp_file = None
+    temp_name = None
     thumb_path = None
     file_path = None
 
     try:
-        temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        file_path = await user_client.download_media(msg, file=temp_file.name)
+        temp_name = await create_temp_file(suffix=suffix)
+        file_path = await user_client.download_media(msg, file=temp_name)
         if isinstance(msg.media, MessageMediaPhoto):
             return InputMediaUploadedPhoto(file=await bot_client.upload_file(file_path))
         elif isinstance(msg.media, MessageMediaDocument):
             if (msg.media.document.mime_type == "video/mp4" and msg.media.document.size > 10 * 1024 * 1024) or (
                     msg.media.document.mime_type == "image/heic"):
                 thumb_path = await user_client.download_media(
-                    msg, file=f"{temp_file.name}_thumb.jpg", thumb=-1
+                    msg, file=f"{temp_name}_thumb.jpg", thumb=-1
                 )
             # 对于文档类型，返回带有特殊标记的对象，以便后续处理
             return InputMediaUploadedDocument(
@@ -119,12 +130,12 @@ async def prepare_album_file(msg: Message, user_client, bot_client):
             )
     finally:
         # 删除临时文件
-        if temp_file:
-            temp_file.close()
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        if thumb_path:
-            os.remove(thumb_path)
+        if file_path and os.path.exists(file_path):
+            await aiofiles.os.remove(file_path)
+        if thumb_path and os.path.exists(thumb_path):
+            await aiofiles.os.remove(thumb_path)
+        if temp_name and os.path.exists(temp_name):
+            await aiofiles.os.remove(temp_name)
 
 
 async def get_comment_message(client, channel, message_id, comment_id):
@@ -294,7 +305,7 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
                                                           thumb=thumb_path,
                                                           buttons=message.buttons,
                                                           force_document=force_document)
-                os.remove(thumb_path)  # 发送后删除缩略图
+                await aiofiles.os.remove(thumb_path)  # 发送后删除缩略图
             elif isinstance(message.media, MessageMediaDocument) and message.media.document.mime_type == 'audio/mpeg':
                 sent_message = await bot_client.send_file(PeerChannel(PRIVATE_CHAT_ID), file_path,
                                                           caption=message.text,
@@ -306,7 +317,7 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
                                                           caption=message.text, nosound_video=True,
                                                           buttons=message.buttons,
                                                           force_document=force_document)
-            os.remove(file_path)  # 发送后删除文件
+            await aiofiles.os.remove(file_path)  # 发送后删除文件
         else:
             sent_message = await bot_client.send_message(PeerChannel(PRIVATE_CHAT_ID), message.text,
                                                          buttons=message.buttons)
