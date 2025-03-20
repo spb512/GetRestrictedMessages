@@ -4,5 +4,4 @@ requests
 psutil
 python-socks
 aiohttp
-aiohttp-socks
 aiofiles

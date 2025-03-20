@@ -5,11 +5,9 @@ import tempfile
 import time
 import urllib.parse
 
-import requests
-import aiohttp
 import aiofiles
 import aiofiles.os
-from aiohttp_socks import ProxyConnector
+import aiohttp
 from telethon import events, utils
 from telethon.errors import ChannelPrivateError, InviteHashInvalidError, UserAlreadyParticipantError, \
     UserBannedInChannelError, InviteRequestSentError, UserRestrictedError, InviteHashExpiredError, FloodWaitError
@@ -33,9 +31,6 @@ addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\
 
 # 用户锁字典，防止并发请求
 USER_LOCKS = {}
-# 全局并发控制，限制系统同时处理的请求总数
-MAX_CONCURRENT_TASKS = 10
-GLOBAL_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 
 async def create_temp_file(suffix=""):
@@ -70,7 +65,7 @@ async def replace_message(message: Message, bot_token):
         message_id = message.fwd_from.channel_post
         url = f"https://api.telegram.org/bot{bot_token}/getChat"
         req_params = {"chat_id": peer_id}
-        
+
         # 获取代理设置
         proxy = None
         if os.environ.get('USE_PROXY', 'False').lower() == 'true':
@@ -78,7 +73,7 @@ async def replace_message(message: Message, bot_token):
             proxy_host = os.environ.get('PROXY_HOST', '127.0.0.1')
             proxy_port = int(os.environ.get('PROXY_PORT', '10808'))
             proxy = f"{proxy_type}://{proxy_host}:{proxy_port}"
-        
+
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=req_params, proxy=proxy) as response:
                 peer_type = "channel"
@@ -483,7 +478,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
     # 检查用户是否已经有正在处理的请求
     if user_id not in USER_LOCKS:
         USER_LOCKS[user_id] = asyncio.Lock()
-    
+
     # 检查锁是否已被占用
     if USER_LOCKS[user_id].locked():
         await event.reply("您有一个正在处理的转发请求，请等待完成后再发送新的请求。")
@@ -499,33 +494,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
 
     # 获取用户锁
     async with USER_LOCKS[user_id]:
-        # 处理全局信号量（允许排队）
-        wait_message = None
-        semaphore_acquired = False
-        
         try:
-            # 如果全局信号量已满，提示用户进入队列并等待
-            if GLOBAL_SEMAPHORE.locked():
-                wait_message = await event.reply("系统当前请求较多，您的请求已加入队列，请耐心等待...")
-                try:
-                    # 尝试在30秒内获取信号量
-                    await asyncio.wait_for(GLOBAL_SEMAPHORE.acquire(), timeout=30.0)
-                    semaphore_acquired = True
-                except asyncio.TimeoutError:
-                    await event.reply("等待超时，系统负载过高，请稍后再试...")
-                    return
-                finally:
-                    # 删除等待提示消息
-                    if wait_message:
-                        try:
-                            await wait_message.delete()
-                        except Exception as e:
-                            log.exception(f"删除等待提示消息失败: {e}")
-            else:
-                # 系统负载正常，直接获取信号量
-                await GLOBAL_SEMAPHORE.acquire()
-                semaphore_acquired = True
-                
             # 开始处理消息转发逻辑
             query = urllib.parse.urlparse(text).query
             params = dict(urllib.parse.parse_qsl(query))
@@ -534,7 +503,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
             except ValueError:
                 await event.reply("无效链接")
                 return
-                
+
             source_chat_id = chat_id
             is_single = 'single' in text
             is_digit = chat_id.isdigit()
@@ -560,7 +529,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                     log.exception(f"Error: {e}")
                     await event.reply("服务器内部错误，请联系管理员")
                     return
-                    
+
                 entity = await user_client.get_entity(peer)
                 from telethon.tl.types import Channel
                 if isinstance(entity, Channel) and not entity.megagroup:  # 频道
@@ -568,14 +537,16 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
                     else:
                         media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                        await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
+                        await user_handle_media_group(event, message, media_group, source_chat_id, bot_client,
+                                                      user_client)
                 else:
                     if is_thread:  # 评论消息
                         if is_single:
                             await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
                         else:
                             media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                            await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
+                            await user_handle_media_group(event, message, media_group, source_chat_id, bot_client,
+                                                          user_client)
                     else:
                         result = await replace_message(message, bot_token)
                         if result:
@@ -588,15 +559,17 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                                 await bot_handle_media_group(event, message, media_group, source_chat_id, bot_client)
                         else:
                             if is_single:
-                                await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
+                                await user_handle_single_message(event, message, source_chat_id, bot_client,
+                                                                 user_client)
                             else:
                                 media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                                await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
+                                await user_handle_media_group(event, message, media_group, source_chat_id, bot_client,
+                                                              user_client)
 
             else:  # 公开频道和公开群组
                 peer = chat_id
                 req_params = {"chat_id": f"@{chat_id}"}
-                
+
                 # 获取代理设置
                 proxy = None
                 if os.environ.get('USE_PROXY', 'False').lower() == 'true':
@@ -604,7 +577,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                     proxy_host = os.environ.get('PROXY_HOST', '127.0.0.1')
                     proxy_port = int(os.environ.get('PROXY_PORT', '10808'))
                     proxy = f"{proxy_type}://{proxy_host}:{proxy_port}"
-                    
+
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, params=req_params, proxy=proxy) as response:
                         if response.status == 200:
@@ -616,7 +589,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         else:
                             await event.reply("服务器内部错误，请联系管理员")
                             return
-                            
+
                 is_channel = peer_type == "channel"
                 if is_channel:  # 公开频道
                     try:
@@ -626,7 +599,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         log.exception(f"Error: {e}")
                         await event.reply("服务器内部错误，请联系管理员")
                         return
-                        
+
                     is_comment = 'comment' in params
                     if is_comment:
                         comment_id = int(params.get('comment'))
@@ -637,7 +610,8 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         )
                         # 1、有评论-单个
                         if is_single:
-                            await user_handle_single_message(event, comment_message, source_chat_id, bot_client, user_client)
+                            await user_handle_single_message(event, comment_message, source_chat_id, bot_client,
+                                                             user_client)
                         # 2、有评论-多个
                         else:
                             # 获取属于同一组的所有消息
@@ -674,7 +648,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         log.exception(f"Error: {e}")
                         await event.reply("服务器内部错误，请联系管理员")
                         return
-                        
+
                     result = await replace_message(message, bot_token)
                     if result:
                         peer, message_id = result
@@ -693,12 +667,9 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         # 8、无替代-多个
                         else:
                             media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                            await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
-                            
+                            await user_handle_media_group(event, message, media_group, source_chat_id, bot_client,
+                                                          user_client)
+
         except Exception as e:
             log.exception(f"处理消息时发生错误: {e}")
             await event.reply("服务器内部错误，请联系管理员")
-        finally:
-            # 释放信号量
-            if semaphore_acquired:
-                GLOBAL_SEMAPHORE.release()

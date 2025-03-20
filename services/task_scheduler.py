@@ -4,8 +4,8 @@
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
 import os
+from datetime import datetime, timedelta
 
 import aiohttp
 
@@ -119,14 +119,16 @@ async def check_trc20_transaction(order_id, wallet_address, bot_client, trongrid
                                 memo = ""
                                 try:
                                     tx_detail_url = f"https://api.trongrid.io/v1/transactions/{tx_hash}"
-                                    async with session.get(tx_detail_url, headers=headers, proxy=proxy) as tx_detail_response:
+                                    async with session.get(tx_detail_url, headers=headers,
+                                                           proxy=proxy) as tx_detail_response:
                                         if tx_detail_response.status == 200:
                                             tx_detail = await tx_detail_response.json()
                                             if "data" in tx_detail and tx_detail["data"]:
                                                 # 提取备注信息
                                                 raw_data = tx_detail["data"][0]["raw_data"]
                                                 if "data" in raw_data:
-                                                    memo = bytes.fromhex(raw_data["data"][2:]).decode('utf-8', errors='ignore')
+                                                    memo = bytes.fromhex(raw_data["data"][2:]).decode('utf-8',
+                                                                                                      errors='ignore')
                                 except Exception as e:
                                     log.error(f"获取交易备注失败: {e}")
                                     # 备注获取失败不影响主要流程

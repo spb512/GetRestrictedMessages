@@ -4,9 +4,9 @@ import os
 import tempfile
 import time
 import urllib.parse
+
 import aiofiles
 import aiofiles.os
-
 from decouple import config
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -34,12 +34,14 @@ PROXY_TYPE = config("PROXY_TYPE", default="socks5")
 PROXY_HOST = config("PROXY_HOST", default="127.0.0.1")
 PROXY_PORT = config("PROXY_PORT", default=10808, cast=int)
 
+
 # 获取代理配置
 def get_proxy_settings():
     """返回代理设置，如果USE_PROXY为False则返回None"""
     if USE_PROXY:
         return (PROXY_TYPE, PROXY_HOST, PROXY_PORT)
     return None
+
 
 if not all([API_ID, API_HASH, SESSION]):
     log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、SESSION")
@@ -56,7 +58,6 @@ except Exception as e:
     log.exception("启动客户端失败")
     log.exception(f"Error: {e}")
     exit(1)
-
 
 # 在配置加载时解析授权用户列表
 AUTH_USERS = set()

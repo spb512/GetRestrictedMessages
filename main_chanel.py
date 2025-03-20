@@ -1,9 +1,7 @@
 import logging
 import urllib.parse
-import re
-import asyncio
-import aiohttp
 
+import aiohttp
 from decouple import config
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -29,12 +27,14 @@ PROXY_TYPE = config("PROXY_TYPE", default="socks5")
 PROXY_HOST = config("PROXY_HOST", default="127.0.0.1")
 PROXY_PORT = config("PROXY_PORT", default=10808, cast=int)
 
+
 # 获取代理配置
 def get_proxy_settings():
     """返回代理设置，如果USE_PROXY为False则返回None"""
     if USE_PROXY:
         return (PROXY_TYPE, PROXY_HOST, PROXY_PORT)
     return None
+
 
 if not all([API_ID, API_HASH, SESSION]):
     log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、SESSION")
@@ -94,12 +94,12 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
     params = {"chat_id": f"@{chat_id}"}
     has_protected_content = False
-    
+
     # 获取代理设置
     proxy = None
     if USE_PROXY:
         proxy = f"{PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}"
-    
+
     async with aiohttp.ClientSession() as session:
         async with session.get(url, params=params, proxy=proxy) as response:
             if response.status == 200:

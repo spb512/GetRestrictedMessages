@@ -100,7 +100,8 @@ async def message_handler(event):
     if not is_authorized(event):
         return
     # 调用链接处理函数
-    await on_new_link(event, bot_client, user_client, system_overloaded=system_overloaded_ref.value, bot_token=BOT_TOKEN)
+    await on_new_link(event, bot_client, user_client, system_overloaded=system_overloaded_ref.value,
+                      bot_token=BOT_TOKEN)
 
 
 # 6. 主函数定义

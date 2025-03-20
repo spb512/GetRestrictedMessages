@@ -74,12 +74,14 @@ if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
     log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、BOT_SESSION、USER_SESSION")
     exit(1)
 
+
 # 获取代理配置
 def get_proxy_settings():
     """返回代理设置，如果USE_PROXY为False则返回None"""
     if USE_PROXY:
-        return (PROXY_TYPE, PROXY_HOST, PROXY_PORT)
+        return PROXY_TYPE, PROXY_HOST, PROXY_PORT
     return None
+
 
 # 验证用户是否有权使用机器人
 def is_authorized(event):

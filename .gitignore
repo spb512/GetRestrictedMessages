@@ -19,3 +19,4 @@ db/__pycache__/message_relations.cpython-313.pyc
 db/__pycache__/orders.cpython-313.pyc
 db/__pycache__/user_quota.cpython-313.pyc
 .gitignore
+.idea/vcs.xml
