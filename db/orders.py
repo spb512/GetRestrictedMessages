@@ -5,12 +5,10 @@ from datetime import datetime
 
 from .database import get_db_connection
 from .user_quota import add_paid_quota
+from config import USDT_WALLET
 
 # 初始化日志记录器
 log = logging.getLogger("Orders")
-
-# USDT钱包地址 - 应从环境变量获取
-USDT_WALLET = "TM9tn28zug456sMkd5AZp9cDCRMFxrH7EG"  # 这是一个示例，实际应从配置中获取
 
 
 def generate_order_id():
