@@ -1,7 +1,8 @@
 import logging
 import urllib.parse
+import re
+import asyncio
 import aiohttp
-from aiohttp_socks import ProxyConnector
 
 from decouple import config
 from telethon import TelegramClient, events
@@ -95,12 +96,12 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     has_protected_content = False
     
     # 获取代理设置
-    connector = None
+    proxy = None
     if USE_PROXY:
-        connector = ProxyConnector.from_url(f"{PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}")
+        proxy = f"{PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}"
     
-    async with aiohttp.ClientSession(connector=connector) as session:
-        async with session.get(url, params=params) as response:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, params=params, proxy=proxy) as response:
             if response.status == 200:
                 result = await response.json()
                 if result and result.get("ok"):

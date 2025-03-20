@@ -7,7 +7,6 @@ import urllib.parse
 
 import requests
 import aiohttp
-from aiohttp_socks import ProxyConnector
 from telethon import events, utils
 from telethon.errors import ChannelPrivateError, InviteHashInvalidError, UserAlreadyParticipantError, \
     UserBannedInChannelError, InviteRequestSentError, UserRestrictedError, InviteHashExpiredError, FloodWaitError
@@ -55,15 +54,15 @@ async def replace_message(message: Message, bot_token):
         req_params = {"chat_id": peer_id}
         
         # 获取代理设置
-        connector = None
+        proxy = None
         if os.environ.get('USE_PROXY', 'False').lower() == 'true':
             proxy_type = os.environ.get('PROXY_TYPE', 'socks5')
             proxy_host = os.environ.get('PROXY_HOST', '127.0.0.1')
             proxy_port = int(os.environ.get('PROXY_PORT', '10808'))
-            connector = ProxyConnector.from_url(f"{proxy_type}://{proxy_host}:{proxy_port}")
+            proxy = f"{proxy_type}://{proxy_host}:{proxy_port}"
         
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(url, params=req_params) as response:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=req_params, proxy=proxy) as response:
                 peer_type = "channel"
                 channel_username = None
                 if response.status == 200:
@@ -556,15 +555,15 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
         req_params = {"chat_id": f"@{chat_id}"}
         
         # 获取代理设置
-        connector = None
+        proxy = None
         if os.environ.get('USE_PROXY', 'False').lower() == 'true':
             proxy_type = os.environ.get('PROXY_TYPE', 'socks5')
             proxy_host = os.environ.get('PROXY_HOST', '127.0.0.1')
             proxy_port = int(os.environ.get('PROXY_PORT', '10808'))
-            connector = ProxyConnector.from_url(f"{proxy_type}://{proxy_host}:{proxy_port}")
+            proxy = f"{proxy_type}://{proxy_host}:{proxy_port}"
             
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(url, params=req_params) as response:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=req_params, proxy=proxy) as response:
                 if response.status == 200:
                     result = await response.json()
                     if result and result.get("ok"):
