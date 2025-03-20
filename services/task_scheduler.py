@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import os
 
 import aiohttp
+from aiohttp_socks import ProxyConnector
 
 from config import TRANSACTION_CHECK_INTERVAL, ADMIN_ID
 from db import (
@@ -86,15 +87,15 @@ async def check_trc20_transaction(order_id, wallet_address, bot_client, trongrid
         }
 
         # 获取代理设置
-        proxy = None
+        connector = None
         if os.environ.get('USE_PROXY', 'False').lower() == 'true':
             proxy_type = os.environ.get('PROXY_TYPE', 'socks5')
             proxy_host = os.environ.get('PROXY_HOST', '127.0.0.1')
             proxy_port = int(os.environ.get('PROXY_PORT', '10808'))
-            proxy = f"{proxy_type}://{proxy_host}:{proxy_port}"
+            connector = ProxyConnector.from_url(f"{proxy_type}://{proxy_host}:{proxy_port}")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, params=params, proxy=proxy) as response:
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.get(url, headers=headers, params=params) as response:
                 if response.status != 200:
                     log.error(f"查询交易失败: {response.status} {await response.text()}")
                     return False
@@ -119,7 +120,7 @@ async def check_trc20_transaction(order_id, wallet_address, bot_client, trongrid
                                 memo = ""
                                 try:
                                     tx_detail_url = f"https://api.trongrid.io/v1/transactions/{tx_hash}"
-                                    async with session.get(tx_detail_url, headers=headers, proxy=proxy) as tx_detail_response:
+                                    async with session.get(tx_detail_url, headers=headers) as tx_detail_response:
                                         if tx_detail_response.status == 200:
                                             tx_detail = await tx_detail_response.json()
                                             if "data" in tx_detail and tx_detail["data"]:
