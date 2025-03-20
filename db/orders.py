@@ -22,6 +22,9 @@ def update_order_tx_info(order_id, tx_hash, memo=""):
         cursor = conn.cursor()
 
         try:
+            # 立即开始事务，获取写锁
+            cursor.execute('BEGIN IMMEDIATE')
+            
             updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute('''
             UPDATE orders 
@@ -34,6 +37,7 @@ def update_order_tx_info(order_id, tx_hash, memo=""):
             return True
         except Exception as e:
             log.exception(f"更新订单交易信息失败: {e}")
+            conn.rollback()
             return False
 
 
@@ -43,6 +47,9 @@ def update_order_last_checked(order_id):
         cursor = conn.cursor()
 
         try:
+            # 立即开始事务，获取写锁
+            cursor.execute('BEGIN IMMEDIATE')
+            
             last_checked = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute('''
             UPDATE orders 
@@ -54,6 +61,7 @@ def update_order_last_checked(order_id):
             return True
         except Exception as e:
             log.exception(f"更新订单检查时间失败: {e}")
+            conn.rollback()
             return False
 
 
@@ -63,17 +71,22 @@ def cancel_expired_order(order_id):
         cursor = conn.cursor()
 
         try:
+            # 立即开始事务，获取写锁
+            cursor.execute('BEGIN IMMEDIATE')
+            
             # 检查订单是否存在且状态为pending
             cursor.execute('SELECT status FROM orders WHERE order_id = ?', (order_id,))
             result = cursor.fetchone()
 
             if not result:
                 log.warning(f"找不到订单 {order_id}")
+                conn.rollback()
                 return False
 
             status = result[0]
             if status != "pending":
                 log.warning(f"订单 {order_id} 状态不是pending，当前状态: {status}")
+                conn.rollback()
                 return False
 
             # 更新订单状态为canceled
@@ -107,14 +120,17 @@ def create_new_order(user_id, package_name, amount, quota_amount):
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
-        order_id = generate_order_id()
-        created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        # 为订单生成独特金额：基础金额 + 0.00001-0.00099的随机小数
-        unique_cents = random.randint(1, 99) / 100000
-        unique_amount = round(amount + unique_cents, 5)  # 保留5位小数
-
         try:
+            # 立即开始事务，获取写锁
+            cursor.execute('BEGIN IMMEDIATE')
+            
+            order_id = generate_order_id()
+            created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            # 为订单生成独特金额：基础金额 + 0.00001-0.00099的随机小数
+            unique_cents = random.randint(1, 99) / 100000
+            unique_amount = round(amount + unique_cents, 5)  # 保留5位小数
+
             cursor.execute('''
             INSERT INTO orders 
             (order_id, user_id, package_name, amount, quota_amount, payment_address, created_at, updated_at)
@@ -127,6 +143,7 @@ def create_new_order(user_id, package_name, amount, quota_amount):
             return order_id, unique_amount
         except Exception as e:
             log.exception(f"创建订单失败: {e}")
+            conn.rollback()
             return None, None
 
 
@@ -157,18 +174,23 @@ def complete_order(order_id, tx_hash=None):
         cursor = conn.cursor()
 
         try:
+            # 立即开始事务，获取写锁
+            cursor.execute('BEGIN IMMEDIATE')
+            
             # 获取订单信息
             cursor.execute('SELECT user_id, quota_amount, status FROM orders WHERE order_id = ?', (order_id,))
             order = cursor.fetchone()
 
             if not order:
                 log.error(f"找不到订单 {order_id}")
+                conn.rollback()
                 return False
 
             user_id, quota_amount, status = order
 
             if status != "pending":
                 log.warning(f"订单 {order_id} 已处理过，当前状态: {status}")
+                conn.rollback()
                 return False
 
             # 更新订单状态
@@ -185,12 +207,19 @@ def complete_order(order_id, tx_hash=None):
                 SET status = "completed", updated_at = ?, completed_at = ? 
                 WHERE order_id = ?
                 ''', (completed_at, completed_at, order_id))
+            
+            # 先提交订单状态更新
             conn.commit()
 
-            # 增加用户次数
-            add_paid_quota(user_id, quota_amount)
-            log.info(f"订单 {order_id} 已完成，为用户 {user_id} 增加了 {quota_amount} 次付费转发次数")
-            return True
+            # 增加用户次数 - 单独处理以避免长事务
+            success = add_paid_quota(user_id, quota_amount)
+            if success:
+                log.info(f"订单 {order_id} 已完成，为用户 {user_id} 增加了 {quota_amount} 次付费转发次数")
+                return True
+            else:
+                log.error(f"订单 {order_id} 已完成，但增加用户次数失败")
+                return False
+                
         except Exception as e:
             log.exception(f"完成订单失败: {e}")
             conn.rollback()
