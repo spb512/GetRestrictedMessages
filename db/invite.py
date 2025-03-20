@@ -84,11 +84,12 @@ def process_invite(invite_code, invitee_id):
             if str(inviter_id) == str(invitee_id):
                 return False, "不能邀请自己"
 
-            # 添加邀请关系
+            # 更新邀请关系，而不是插入新记录
             cursor.execute('''
-            INSERT INTO invite_relations (inviter_id, invitee_id, invite_code)
-            VALUES (?, ?, ?)
-            ''', (inviter_id, str(invitee_id), invite_code))
+            UPDATE invite_relations
+            SET invitee_id = ?
+            WHERE invite_code = ? AND inviter_id = ?
+            ''', (str(invitee_id), invite_code, inviter_id))
 
             conn.commit()
 
