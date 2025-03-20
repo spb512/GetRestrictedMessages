@@ -201,7 +201,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS invite_relations (
             inviter_id TEXT NOT NULL,
             invitee_id TEXT,
-            invite_code TEXT NOT NULL,
+            invite_code TEXT NOT NULL UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (invitee_id)
         )
