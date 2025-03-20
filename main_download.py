@@ -13,10 +13,6 @@ from telethon.sessions import StringSession
 from telethon.tl.types import MessageMediaDocument, InputMediaUploadedDocument, InputMediaUploadedPhoto, \
     MessageMediaPhoto, Message, PeerChannel
 
-from config import (
-    TARGET_BOT_ID, RANGE
-)
-
 # 初始化日志记录器
 logging.basicConfig(
     level=logging.INFO, format="[%(levelname)s] %(asctime)s - %(message)s"
