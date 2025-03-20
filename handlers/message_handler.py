@@ -33,6 +33,9 @@ addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\
 
 # 用户锁字典，防止并发请求
 USER_LOCKS = {}
+# 全局并发控制，限制系统同时处理的请求总数
+MAX_CONCURRENT_TASKS = 10
+GLOBAL_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 
 async def create_temp_file(suffix=""):
@@ -475,6 +478,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
     if system_overloaded:
         await event.reply("系统当前负载较高，请稍后再试...")
         return
+
     user_id = event.sender_id
     # 检查用户是否已经有正在处理的请求
     if user_id not in USER_LOCKS:
@@ -493,10 +497,36 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
         await event.reply("您今日的转发次数已用完！每天0点重置免费次数，或通过支付购买更多次数。")
         return
 
-    try:
-        # 使用 async with 获取锁
-        async with USER_LOCKS[user_id]:
-            # 处理消息转发逻辑
+    # 获取用户锁
+    async with USER_LOCKS[user_id]:
+        # 处理全局信号量（允许排队）
+        wait_message = None
+        semaphore_acquired = False
+        
+        try:
+            # 如果全局信号量已满，提示用户进入队列并等待
+            if GLOBAL_SEMAPHORE.locked():
+                wait_message = await event.reply("系统当前请求较多，您的请求已加入队列，请耐心等待...")
+                try:
+                    # 尝试在30秒内获取信号量
+                    await asyncio.wait_for(GLOBAL_SEMAPHORE.acquire(), timeout=30.0)
+                    semaphore_acquired = True
+                except asyncio.TimeoutError:
+                    await event.reply("等待超时，系统负载过高，请稍后再试...")
+                    return
+                finally:
+                    # 删除等待提示消息
+                    if wait_message:
+                        try:
+                            await wait_message.delete()
+                        except Exception as e:
+                            log.exception(f"删除等待提示消息失败: {e}")
+            else:
+                # 系统负载正常，直接获取信号量
+                await GLOBAL_SEMAPHORE.acquire()
+                semaphore_acquired = True
+                
+            # 开始处理消息转发逻辑
             query = urllib.parse.urlparse(text).query
             params = dict(urllib.parse.parse_qsl(query))
             try:
@@ -504,6 +534,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
             except ValueError:
                 await event.reply("无效链接")
                 return
+                
             source_chat_id = chat_id
             is_single = 'single' in text
             is_digit = chat_id.isdigit()
@@ -529,6 +560,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                     log.exception(f"Error: {e}")
                     await event.reply("服务器内部错误，请联系管理员")
                     return
+                    
                 entity = await user_client.get_entity(peer)
                 from telethon.tl.types import Channel
                 if isinstance(entity, Channel) and not entity.megagroup:  # 频道
@@ -559,8 +591,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                                 await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
                             else:
                                 media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                                await user_handle_media_group(event, message, media_group, source_chat_id, bot_client,
-                                                              user_client)
+                                await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
 
             else:  # 公开频道和公开群组
                 peer = chat_id
@@ -585,6 +616,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         else:
                             await event.reply("服务器内部错误，请联系管理员")
                             return
+                            
                 is_channel = peer_type == "channel"
                 if is_channel:  # 公开频道
                     try:
@@ -594,6 +626,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         log.exception(f"Error: {e}")
                         await event.reply("服务器内部错误，请联系管理员")
                         return
+                        
                     is_comment = 'comment' in params
                     if is_comment:
                         comment_id = int(params.get('comment'))
@@ -641,11 +674,11 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         log.exception(f"Error: {e}")
                         await event.reply("服务器内部错误，请联系管理员")
                         return
+                        
                     result = await replace_message(message, bot_token)
                     if result:
                         peer, message_id = result
                         message = await bot_client.get_messages(peer, ids=message_id)
-                        # await event.reply("替换频道消息，免下载转发")
                         # 5、有替代-单个
                         if is_single:
                             await bot_handle_single_message(event, message, source_chat_id, bot_client)
@@ -661,10 +694,11 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         else:
                             media_group = await get_media_group_messages(message, message_id, peer, user_client)
                             await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
-
-    except Exception as e:
-        log.exception(f"处理消息时发生错误: {e}")
-        await event.reply("服务器内部错误，请联系管理员")
-    finally:
-        # 清理其他资源（如果有的话）
-        pass
+                            
+        except Exception as e:
+            log.exception(f"处理消息时发生错误: {e}")
+            await event.reply("服务器内部错误，请联系管理员")
+        finally:
+            # 释放信号量
+            if semaphore_acquired:
+                GLOBAL_SEMAPHORE.release()
