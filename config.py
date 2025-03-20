@@ -23,6 +23,12 @@ BOT_TOKEN = config("BOT_TOKEN", default=None)
 PRIVATE_CHAT_ID = config("PRIVATE_CHAT_ID", default=None, cast=int)
 AUTHS = config("AUTHS", default="")
 
+# 代理设置
+USE_PROXY = config("USE_PROXY", default=False, cast=bool)
+PROXY_TYPE = config("PROXY_TYPE", default="socks5")
+PROXY_HOST = config("PROXY_HOST", default="127.0.0.1")
+PROXY_PORT = config("PROXY_PORT", default=10808, cast=int)
+
 # USDT(TRC20)钱包地址 - 用于接收付款
 USDT_WALLET = config("USDT_WALLET", default="TM9tn28zug456sMkd5AZp9cDCRMFxrH7EG")
 # TRONGRID API 密钥 - 用于查询交易
@@ -68,6 +74,12 @@ if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
     log.error("缺少一个或多个必要环境变量: API_ID、API_HASH、BOT_SESSION、USER_SESSION")
     exit(1)
 
+# 获取代理配置
+def get_proxy_settings():
+    """返回代理设置，如果USE_PROXY为False则返回None"""
+    if USE_PROXY:
+        return (PROXY_TYPE, PROXY_HOST, PROXY_PORT)
+    return None
 
 # 验证用户是否有权使用机器人
 def is_authorized(event):

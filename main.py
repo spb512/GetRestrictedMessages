@@ -15,7 +15,8 @@ from config import (
     API_ID, API_HASH, BOT_SESSION, USER_SESSION, BOT_TOKEN,
     is_authorized,
     CPU_THRESHOLD, MEMORY_THRESHOLD, DISK_IO_THRESHOLD,
-    MONITOR_INTERVAL, TRANSACTION_CHECK_INTERVAL, TRONGRID_API_KEY, USDT_CONTRACT
+    MONITOR_INTERVAL, TRANSACTION_CHECK_INTERVAL, TRONGRID_API_KEY, USDT_CONTRACT,
+    get_proxy_settings
 )
 # 导入数据库模块
 from db import (
@@ -36,8 +37,11 @@ system_overloaded_ref = Value('b', False)  # 'b' 表示布尔值
 # 初始化数据库
 init_db()
 
-bot_client = TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH, proxy=('socks5', '127.0.0.1', 10808))
-user_client = TelegramClient(StringSession(USER_SESSION), API_ID, API_HASH, proxy=('socks5', '127.0.0.1', 10808))
+# 获取代理设置
+proxy_settings = get_proxy_settings()
+
+bot_client = TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH, proxy=proxy_settings)
+user_client = TelegramClient(StringSession(USER_SESSION), API_ID, API_HASH, proxy=proxy_settings)
 
 
 # 注册命令处理器
