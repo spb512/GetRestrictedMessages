@@ -31,7 +31,7 @@ from config import PRIVATE_CHAT_ID, RANGE
 # 附加信息
 addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\n♍[91转发|聊天👉：](https://t.me/91_zf_bot)@91_zf_group\n🔯[91转发|通知👉：](https://t.me/91_zf_channel)@91_zf_channel"
 
-# 用户锁定字典，防止并发请求
+# 用户锁字典，防止并发请求
 USER_LOCKS = {}
 
 
@@ -263,7 +263,7 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
         await event.reply("服务器内部错误，请联系管理员")
     finally:
         # 无论成功与否，最终都要解锁用户
-        USER_LOCKS[event.sender_id] = False
+        USER_LOCKS[event.sender_id].release()
 
 
 async def user_handle_single_message(event: events.NewMessage.Event, message, source_chat_id, bot_client,
@@ -346,7 +346,7 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
         await event.reply("服务器内部错误，请联系管理员")
     finally:
         # 无论成功与否，最终都要解锁用户
-        USER_LOCKS[event.sender_id] = False
+        USER_LOCKS[event.sender_id].release()
 
 
 async def bot_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id,
@@ -378,7 +378,7 @@ async def bot_handle_media_group(event: events.NewMessage.Event, message, media_
         await event.reply("服务器内部错误，请联系管理员")
     finally:
         # 无论成功与否，最终都要解锁用户
-        USER_LOCKS[event.sender_id] = False
+        USER_LOCKS[event.sender_id].release()
 
 
 async def bot_handle_single_message(event: events.NewMessage.Event, message, source_chat_id, bot_client) -> None:
@@ -414,7 +414,7 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
         await event.reply("服务器内部错误，请联系管理员")
     finally:
         # 无论成功与否，最终都要解锁用户
-        USER_LOCKS[event.sender_id] = False
+        USER_LOCKS[event.sender_id].release()
 
 
 async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, system_overloaded=False,
@@ -473,7 +473,11 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
         return
     user_id = event.sender_id
     # 检查用户是否已经有正在处理的请求
-    if user_id in USER_LOCKS and USER_LOCKS[user_id]:
+    if user_id not in USER_LOCKS:
+        USER_LOCKS[user_id] = asyncio.Lock()
+
+    # 尝试获取锁
+    if USER_LOCKS[user_id].locked():
         await event.reply("您有一个正在处理的转发请求，请等待完成后再发送新的请求。")
         return
 
@@ -485,16 +489,16 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
         await event.reply("您今日的转发次数已用完！每天0点重置免费次数，或通过支付购买更多次数。")
         return
 
-    # 锁定用户，防止并发请求
-    USER_LOCKS[user_id] = True
+    # 获取锁
+    await USER_LOCKS[user_id].acquire()
 
     query = urllib.parse.urlparse(text).query
     params = dict(urllib.parse.parse_qsl(query))
     try:
         chat_id, message_id = await parse_url(text.split('?')[0])
     except ValueError:
-        # 如果解析失败，解锁用户
-        USER_LOCKS[user_id] = False
+        # 如果解析失败，释放锁
+        USER_LOCKS[user_id].release()
         await event.reply("无效链接")
         return
     source_chat_id = chat_id
@@ -514,19 +518,19 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                 await event.reply("请先发送频道里任意一条消息的链接，再发送评论区消息的链接")
             else:
                 await event.reply("私人频道/私人群组，请先发送入群邀请链接，然后再发送消息链接。")
-            # 解锁用户，允许发送新请求
-            USER_LOCKS[user_id] = False
+            # 释放锁，允许发送新请求
+            USER_LOCKS[user_id].release()
             return
         except ChannelPrivateError as e:
             await event.reply("此群组/频道无法访问，或你已被拉黑(踢了)")
-            # 解锁用户，允许发送新请求
-            USER_LOCKS[user_id] = False
+            # 释放锁，允许发送新请求
+            USER_LOCKS[user_id].release()
             return
         except Exception as e:
             log.exception(f"Error: {e}")
             await event.reply("服务器内部错误，请联系管理员")
-            # 解锁用户，允许发送新请求
-            USER_LOCKS[user_id] = False
+            # 释放锁，允许发送新请求
+            USER_LOCKS[user_id].release()
             return
         entity = await user_client.get_entity(peer)
         from telethon.tl.types import Channel
@@ -583,8 +587,8 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                         peer_type = channel.get("type")
                 else:
                     await event.reply("服务器内部错误，请联系管理员")
-                    # 解锁用户，允许发送新请求
-                    USER_LOCKS[user_id] = False
+                    # 释放锁，允许发送新请求
+                    USER_LOCKS[user_id].release()
                     return
         is_channel = peer_type == "channel"
         if is_channel:  # 公开频道
@@ -594,8 +598,8 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
             except Exception as e:
                 log.exception(f"Error: {e}")
                 await event.reply("服务器内部错误，请联系管理员")
-                # 解锁用户，允许发送新请求
-                USER_LOCKS[user_id] = False
+                # 释放锁，允许发送新请求
+                USER_LOCKS[user_id].release()
                 return
             is_comment = 'comment' in params
             if is_comment:
@@ -625,8 +629,8 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
             else:
                 if not has_protected_content:
                     await event.reply("此消息允许转发！无需使用本机器人")
-                    # 解锁用户，允许发送新请求
-                    USER_LOCKS[user_id] = False
+                    # 释放锁，允许发送新请求
+                    USER_LOCKS[user_id].release()
                     return
                 # 3、无评论-单个
                 if is_single:
@@ -638,8 +642,8 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
         else:  # 公开群组
             if not has_protected_content:
                 await event.reply("此消息允许转发！无需使用本机器人")
-                # 解锁用户，允许发送新请求
-                USER_LOCKS[user_id] = False
+                # 释放锁，允许发送新请求
+                USER_LOCKS[user_id].release()
                 return
             try:
                 # 获取指定聊天中的消息
@@ -647,8 +651,8 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
             except Exception as e:
                 log.exception(f"Error: {e}")
                 await event.reply("服务器内部错误，请联系管理员")
-                # 解锁用户，允许发送新请求
-                USER_LOCKS[user_id] = False
+                # 释放锁，允许发送新请求
+                USER_LOCKS[user_id].release()
                 return
             result = await replace_message(message, bot_token)
             if result:
