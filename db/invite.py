@@ -61,7 +61,7 @@ def process_invite(invite_code, invitee_id):
                 return False, "无效的邀请码"
 
             inviter_id, created_at = result
-            
+
             # 检查邀请人是否已达到邀请上限
             cursor.execute('SELECT COUNT(*) FROM invite_relations WHERE inviter_id = ? AND invitee_id IS NOT NULL',
                            (inviter_id,))
@@ -73,7 +73,7 @@ def process_invite(invite_code, invitee_id):
             cursor.execute('SELECT inviter_id FROM invite_relations WHERE invitee_id = ?', (str(invitee_id),))
             if cursor.fetchone():
                 return False, "您已经被其他用户邀请过了"
-                
+
             # 检查用户是否已经使用过机器人
             # 查询用户配额表，如果存在记录则表示已经使用过机器人
             cursor.execute('SELECT user_id FROM user_forward_quota WHERE user_id = ?', (str(invitee_id),))

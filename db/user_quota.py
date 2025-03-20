@@ -15,7 +15,7 @@ def get_user_quota(user_id):
         try:
             # 立即开始事务，获取写锁
             cursor.execute('BEGIN IMMEDIATE')
-            
+
             # 检查用户是否已有记录
             cursor.execute('SELECT free_quota, paid_quota, last_reset_date FROM user_forward_quota WHERE user_id = ?',
                            (str(user_id),))
@@ -54,16 +54,16 @@ def decrease_user_quota(user_id):
     """减少用户的转发次数，优先使用免费次数"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
+
         try:
             # 立即开始事务，获取写锁
             cursor.execute('BEGIN IMMEDIATE')
-            
+
             # 直接从数据库获取最新配额，避免使用可能过时的缓存值
             cursor.execute('SELECT free_quota, paid_quota FROM user_forward_quota WHERE user_id = ?',
                            (str(user_id),))
             result = cursor.fetchone()
-            
+
             if not result:
                 # 用户不存在，创建记录
                 current_date = datetime.now().strftime('%Y-%m-%d')
@@ -106,18 +106,18 @@ def add_paid_quota(user_id, amount):
     """为用户添加付费转发次数"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
+
         try:
             # 立即开始事务，获取写锁
             cursor.execute('BEGIN IMMEDIATE')
-            
+
             # 直接从数据库获取最新配额
             cursor.execute('SELECT free_quota, paid_quota, last_reset_date FROM user_forward_quota WHERE user_id = ?',
                            (str(user_id),))
             result = cursor.fetchone()
-            
+
             current_date = datetime.now().strftime('%Y-%m-%d')
-            
+
             if not result:
                 # 新用户，创建记录
                 cursor.execute(
@@ -152,7 +152,7 @@ def reset_all_free_quotas():
         try:
             # 立即开始事务，获取写锁
             cursor.execute('BEGIN IMMEDIATE')
-            
+
             # 查找所有昨天的记录（last_reset_date不等于今天）
             cursor.execute('SELECT user_id FROM user_forward_quota WHERE last_reset_date != ?', (current_date,))
             users = cursor.fetchall()

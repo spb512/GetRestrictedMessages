@@ -14,8 +14,7 @@ from telethon.tl.types import MessageMediaDocument, InputMediaUploadedDocument, 
     MessageMediaPhoto, Message, PeerChannel
 
 from config import (
-    API_ID, API_HASH, SESSION, TARGET_BOT_ID, AUTHS, RANGE,
-    get_proxy_settings
+    TARGET_BOT_ID, RANGE
 )
 
 # 初始化日志记录器

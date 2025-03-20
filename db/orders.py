@@ -3,9 +3,9 @@ import random
 import uuid
 from datetime import datetime
 
+from config import USDT_WALLET
 from .database import get_db_connection
 from .user_quota import add_paid_quota
-from config import USDT_WALLET
 
 # 初始化日志记录器
 log = logging.getLogger("Orders")
@@ -24,7 +24,7 @@ def update_order_tx_info(order_id, tx_hash, memo=""):
         try:
             # 立即开始事务，获取写锁
             cursor.execute('BEGIN IMMEDIATE')
-            
+
             updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute('''
             UPDATE orders 
@@ -49,7 +49,7 @@ def update_order_last_checked(order_id):
         try:
             # 立即开始事务，获取写锁
             cursor.execute('BEGIN IMMEDIATE')
-            
+
             last_checked = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute('''
             UPDATE orders 
@@ -73,7 +73,7 @@ def cancel_expired_order(order_id):
         try:
             # 立即开始事务，获取写锁
             cursor.execute('BEGIN IMMEDIATE')
-            
+
             # 检查订单是否存在且状态为pending
             cursor.execute('SELECT status FROM orders WHERE order_id = ?', (order_id,))
             result = cursor.fetchone()
@@ -123,7 +123,7 @@ def create_new_order(user_id, package_name, amount, quota_amount):
         try:
             # 立即开始事务，获取写锁
             cursor.execute('BEGIN IMMEDIATE')
-            
+
             order_id = generate_order_id()
             created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -176,7 +176,7 @@ def complete_order(order_id, tx_hash=None):
         try:
             # 立即开始事务，获取写锁
             cursor.execute('BEGIN IMMEDIATE')
-            
+
             # 获取订单信息
             cursor.execute('SELECT user_id, quota_amount, status FROM orders WHERE order_id = ?', (order_id,))
             order = cursor.fetchone()
@@ -207,7 +207,7 @@ def complete_order(order_id, tx_hash=None):
                 SET status = "completed", updated_at = ?, completed_at = ? 
                 WHERE order_id = ?
                 ''', (completed_at, completed_at, order_id))
-            
+
             # 先提交订单状态更新
             conn.commit()
 
@@ -219,7 +219,7 @@ def complete_order(order_id, tx_hash=None):
             else:
                 log.error(f"订单 {order_id} 已完成，但增加用户次数失败")
                 return False
-                
+
         except Exception as e:
             log.exception(f"完成订单失败: {e}")
             conn.rollback()

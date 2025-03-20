@@ -7,8 +7,7 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
 from config import (
-    API_ID, API_HASH, SESSION, BOT_TOKEN, AUTHS, RANGE,
-    get_proxy_settings
+    BOT_TOKEN, RANGE
 )
 
 # 初始化日志记录器
