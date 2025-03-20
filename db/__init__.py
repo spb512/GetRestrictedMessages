@@ -1,4 +1,4 @@
-from .database import init_db, get_db_connection
+from .database import init_db, get_db_connection, add_indexes, analyze_db, analyze_index_usage
 from .invite import (
     generate_invite_code,
     get_user_invite_code,
