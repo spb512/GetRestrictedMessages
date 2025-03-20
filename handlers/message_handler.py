@@ -4,8 +4,8 @@ import os
 import tempfile
 import time
 import urllib.parse
-import aiohttp  # 添加 aiohttp 依赖
 
+import requests
 from telethon import events, utils
 from telethon.errors import ChannelPrivateError, InviteHashInvalidError, UserAlreadyParticipantError, \
     UserBannedInChannelError, InviteRequestSentError, UserRestrictedError, InviteHashExpiredError, FloodWaitError
@@ -51,18 +51,15 @@ async def replace_message(message: Message, bot_token):
         message_id = message.fwd_from.channel_post
         url = f"https://api.telegram.org/bot{bot_token}/getChat"
         req_params = {"chat_id": peer_id}
-        
-        # 使用异步请求替代同步请求
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=req_params) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    if result and result.get("ok"):
-                        channel = result.get("result")
-                        peer_type = channel.get("type", "channel")
-                        channel_username = channel.get("username")
-                        if peer_type == "channel" and channel_username:
-                            return channel_username, message_id
+        result = requests.get(url, params=req_params)
+        peer_type = "channel"
+        channel_username = None
+        if result and result.json().get("ok"):
+            channel = result.json().get("result")
+            peer_type = channel.get("type", "channel")
+            channel_username = channel.get("username")
+        if peer_type == "channel" and channel_username:
+            return channel_username, message_id
     return None
 
 
@@ -402,7 +399,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
     text = event.text
     if not text:
         return
-    
+
     # 检查是否是邀请链接 (t.me/+)
     if "t.me/+" in text:
         try:
@@ -442,7 +439,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
             log.exception(f"加入群组/频道失败: {e}")
             await event.reply("加入群组/频道失败,请联系管理员。")
             return
-    
+
     # 检查消息是否包含有效的Telegram链接
     if not text.startswith(("https://t.me", "http://t.me")):
         return
