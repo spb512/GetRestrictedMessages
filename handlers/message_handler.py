@@ -53,8 +53,16 @@ async def replace_message(message: Message, bot_token):
         url = f"https://api.telegram.org/bot{bot_token}/getChat"
         req_params = {"chat_id": peer_id}
         
+        # 获取代理设置
+        proxy = None
+        if os.environ.get('USE_PROXY', 'False').lower() == 'true':
+            proxy_type = os.environ.get('PROXY_TYPE', 'socks5')
+            proxy_host = os.environ.get('PROXY_HOST', '127.0.0.1')
+            proxy_port = int(os.environ.get('PROXY_PORT', '10808'))
+            proxy = f"{proxy_type}://{proxy_host}:{proxy_port}"
+        
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=req_params) as response:
+            async with session.get(url, params=req_params, proxy=proxy) as response:
                 peer_type = "channel"
                 channel_username = None
                 if response.status == 200:
@@ -545,8 +553,17 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
     else:  # 公开频道和公开群组
         peer = chat_id
         req_params = {"chat_id": f"@{chat_id}"}
+        
+        # 获取代理设置
+        proxy = None
+        if os.environ.get('USE_PROXY', 'False').lower() == 'true':
+            proxy_type = os.environ.get('PROXY_TYPE', 'socks5')
+            proxy_host = os.environ.get('PROXY_HOST', '127.0.0.1')
+            proxy_port = int(os.environ.get('PROXY_PORT', '10808'))
+            proxy = f"{proxy_type}://{proxy_host}:{proxy_port}"
+            
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=req_params) as response:
+            async with session.get(url, params=req_params, proxy=proxy) as response:
                 if response.status == 200:
                     result = await response.json()
                     if result and result.get("ok"):

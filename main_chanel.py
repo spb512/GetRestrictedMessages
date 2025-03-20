@@ -95,8 +95,13 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
     params = {"chat_id": f"@{chat_id}"}
     has_protected_content = False
     
+    # 获取代理设置
+    proxy = None
+    if USE_PROXY:
+        proxy = f"{PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}"
+    
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, params=params) as response:
+        async with session.get(url, params=params, proxy=proxy) as response:
             if response.status == 200:
                 result = await response.json()
                 if result and result.get("ok"):
