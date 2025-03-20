@@ -6,6 +6,7 @@ import time
 import urllib.parse
 
 import requests
+import aiohttp
 from telethon import events, utils
 from telethon.errors import ChannelPrivateError, InviteHashInvalidError, UserAlreadyParticipantError, \
     UserBannedInChannelError, InviteRequestSentError, UserRestrictedError, InviteHashExpiredError, FloodWaitError
@@ -51,15 +52,19 @@ async def replace_message(message: Message, bot_token):
         message_id = message.fwd_from.channel_post
         url = f"https://api.telegram.org/bot{bot_token}/getChat"
         req_params = {"chat_id": peer_id}
-        result = requests.get(url, params=req_params)
-        peer_type = "channel"
-        channel_username = None
-        if result and result.json().get("ok"):
-            channel = result.json().get("result")
-            peer_type = channel.get("type", "channel")
-            channel_username = channel.get("username")
-        if peer_type == "channel" and channel_username:
-            return channel_username, message_id
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=req_params) as response:
+                peer_type = "channel"
+                channel_username = None
+                if response.status == 200:
+                    result = await response.json()
+                    if result and result.get("ok"):
+                        channel = result.get("result")
+                        peer_type = channel.get("type", "channel")
+                        channel_username = channel.get("username")
+                if peer_type == "channel" and channel_username:
+                    return channel_username, message_id
     return None
 
 
@@ -540,16 +545,19 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
     else:  # 公开频道和公开群组
         peer = chat_id
         req_params = {"chat_id": f"@{chat_id}"}
-        result = requests.get(url, params=req_params)
-        if result and result.json().get("ok"):
-            channel = result.json().get("result")
-            has_protected_content = channel.get("has_protected_content", False)
-            peer_type = channel.get("type")
-        else:
-            await event.reply("服务器内部错误，请联系管理员")
-            # 解锁用户，允许发送新请求
-            USER_LOCKS[user_id] = False
-            return
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=req_params) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    if result and result.get("ok"):
+                        channel = result.get("result")
+                        has_protected_content = channel.get("has_protected_content", False)
+                        peer_type = channel.get("type")
+                else:
+                    await event.reply("服务器内部错误，请联系管理员")
+                    # 解锁用户，允许发送新请求
+                    USER_LOCKS[user_id] = False
+                    return
         is_channel = peer_type == "channel"
         if is_channel:  # 公开频道
             try:

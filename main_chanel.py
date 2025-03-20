@@ -1,7 +1,9 @@
 import logging
 import urllib.parse
+import re
+import asyncio
+import aiohttp
 
-import requests
 from decouple import config
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -77,11 +79,15 @@ async def on_new_link(event: events.NewMessage.Event) -> None:
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
     params = {"chat_id": f"@{chat_id}"}
-    result = requests.get(url, params=params)
     has_protected_content = False
-    if result and result.json().get("ok"):
-        channel = result.json().get("result")
-        has_protected_content = channel.get("has_protected_content", False)
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, params=params) as response:
+            if response.status == 200:
+                result = await response.json()
+                if result and result.get("ok"):
+                    channel = result.get("result")
+                    has_protected_content = channel.get("has_protected_content", False)
 
     # 如果链接包含 '?single' 参数，则只处理当前消息
     if is_single:

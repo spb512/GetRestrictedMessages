@@ -6,6 +6,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
+import aiohttp
+
 from config import TRANSACTION_CHECK_INTERVAL, ADMIN_ID
 from db import (
     get_all_pending_orders, update_order_last_checked,
@@ -71,7 +73,6 @@ async def check_trc20_transaction(order_id, wallet_address, bot_client, trongrid
 
     try:
         # 使用TronGrid API查询交易
-        import requests
         url = f"https://api.trongrid.io/v1/accounts/{wallet_address}/transactions/trc20"
         headers = {
             "Accept": "application/json",
@@ -83,65 +84,65 @@ async def check_trc20_transaction(order_id, wallet_address, bot_client, trongrid
             "only_confirmed": True
         }
 
-        response = requests.get(url, headers=headers, params=params)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as response:
+                if response.status != 200:
+                    log.error(f"查询交易失败: {response.status} {await response.text()}")
+                    return False
 
-        if response.status_code != 200:
-            log.error(f"查询交易失败: {response.status_code} {response.text}")
-            return False
+                data = await response.json()
 
-        data = response.json()
+                # 检查是否有符合条件的交易
+                if "data" in data:
+                    transactions = data["data"]
+                    for tx in transactions:
+                        # 只检查USDT转入交易
+                        if tx["to"] == wallet_address and tx["token_info"]["address"] == usdt_contract:
+                            # 获取交易金额（USDT有6位小数）
+                            value = float(tx["value"]) / 10 ** 6
 
-        # 检查是否有符合条件的交易
-        if "data" in data:
-            transactions = data["data"]
-            for tx in transactions:
-                # 只检查USDT转入交易
-                if tx["to"] == wallet_address and tx["token_info"]["address"] == usdt_contract:
-                    # 获取交易金额（USDT有6位小数）
-                    value = float(tx["value"]) / 10 ** 6
+                            # 检查金额是否精确匹配
+                            if abs(value - expected_amount) < 0.00001:  # 允许0.00001美元的误差，因为我们使用5位小数
+                                # 获取交易哈希
+                                tx_hash = tx["transaction_id"]
 
-                    # 检查金额是否精确匹配
-                    if abs(value - expected_amount) < 0.00001:  # 允许0.00001美元的误差，因为我们使用5位小数
-                        # 获取交易哈希
-                        tx_hash = tx["transaction_id"]
-
-                        # 尝试获取交易的备注信息，但不强制要求
-                        memo = ""
-                        try:
-                            tx_detail_url = f"https://api.trongrid.io/v1/transactions/{tx_hash}"
-                            tx_detail_response = requests.get(tx_detail_url, headers=headers)
-                            if tx_detail_response.status_code == 200:
-                                tx_detail = tx_detail_response.json()
-                                if "data" in tx_detail and tx_detail["data"]:
-                                    # 提取备注信息
-                                    raw_data = tx_detail["data"][0]["raw_data"]
-                                    if "data" in raw_data:
-                                        memo = bytes.fromhex(raw_data["data"][2:]).decode('utf-8', errors='ignore')
-                        except Exception as e:
-                            log.error(f"获取交易备注失败: {e}")
-                            # 备注获取失败不影响主要流程
-
-                        # 更新订单的交易哈希和备注
-                        from db import update_order_tx_info
-                        update_order_tx_info(order_id, tx_hash, memo)
-
-                        # 完成订单 - 金额精确匹配即可确认
-                        success = complete_order(order_id, tx_hash)
-                        if success:
-                            log.info(f"自动确认订单 {order_id} 支付成功，交易哈希: {tx_hash}，金额: {value}$")
-                            # 通知用户订单已完成
-                            order = get_order_by_id(order_id)
-                            await notify_user_order_completed(order, bot_client)
-
-                            # 通知管理员订单已自动完成
-                            if ADMIN_ID:
-                                admin_msg = f"🤖 自动确认订单 🤖\n\n订单ID: {order_id}\n用户ID: {user_id}\n金额: {expected_amount}$\n交易哈希: {tx_hash}"
+                                # 尝试获取交易的备注信息，但不强制要求
+                                memo = ""
                                 try:
-                                    await bot_client.send_message(ADMIN_ID, admin_msg)
+                                    tx_detail_url = f"https://api.trongrid.io/v1/transactions/{tx_hash}"
+                                    async with session.get(tx_detail_url, headers=headers) as tx_detail_response:
+                                        if tx_detail_response.status == 200:
+                                            tx_detail = await tx_detail_response.json()
+                                            if "data" in tx_detail and tx_detail["data"]:
+                                                # 提取备注信息
+                                                raw_data = tx_detail["data"][0]["raw_data"]
+                                                if "data" in raw_data:
+                                                    memo = bytes.fromhex(raw_data["data"][2:]).decode('utf-8', errors='ignore')
                                 except Exception as e:
-                                    log.error(f"通知管理员失败: {e}")
+                                    log.error(f"获取交易备注失败: {e}")
+                                    # 备注获取失败不影响主要流程
 
-                            return True
+                                # 更新订单的交易哈希和备注
+                                from db import update_order_tx_info
+                                update_order_tx_info(order_id, tx_hash, memo)
+
+                                # 完成订单 - 金额精确匹配即可确认
+                                success = complete_order(order_id, tx_hash)
+                                if success:
+                                    log.info(f"自动确认订单 {order_id} 支付成功，交易哈希: {tx_hash}，金额: {value}$")
+                                    # 通知用户订单已完成
+                                    order = get_order_by_id(order_id)
+                                    await notify_user_order_completed(order, bot_client)
+
+                                    # 通知管理员订单已自动完成
+                                    if ADMIN_ID:
+                                        admin_msg = f"🤖 自动确认订单 🤖\n\n订单ID: {order_id}\n用户ID: {user_id}\n金额: {expected_amount}$\n交易哈希: {tx_hash}"
+                                        try:
+                                            await bot_client.send_message(ADMIN_ID, admin_msg)
+                                        except Exception as e:
+                                            log.error(f"通知管理员失败: {e}")
+
+                                    return True
 
         # 更新订单最后检查时间
         update_order_last_checked(order_id)
