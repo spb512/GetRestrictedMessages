@@ -37,10 +37,14 @@ USER_LOCKS = {}
 
 async def create_temp_file(suffix=""):
     """创建临时文件的异步封装"""
-    temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-    temp_name = temp_file.name
-    temp_file.close()
-    return temp_name
+    try:
+        temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        temp_name = temp_file.name
+        temp_file.close()
+        return temp_name
+    except Exception as e:
+        log.exception(f"创建临时文件失败: {e}")
+        raise
 
 
 async def process_forward_quota(event):
@@ -262,8 +266,8 @@ async def user_handle_media_group(event: events.NewMessage.Event, message, media
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请联系管理员")
     finally:
-        # 无论成功与否，最终都要解锁用户
-        USER_LOCKS[event.sender_id].release()
+        # 清理其他资源（如果有的话）
+        pass
 
 
 async def user_handle_single_message(event: events.NewMessage.Event, message, source_chat_id, bot_client,
@@ -345,8 +349,8 @@ async def user_handle_single_message(event: events.NewMessage.Event, message, so
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请联系管理员")
     finally:
-        # 无论成功与否，最终都要解锁用户
-        USER_LOCKS[event.sender_id].release()
+        # 清理其他资源（如果有的话）
+        pass
 
 
 async def bot_handle_media_group(event: events.NewMessage.Event, message, media_group, source_chat_id,
@@ -377,8 +381,8 @@ async def bot_handle_media_group(event: events.NewMessage.Event, message, media_
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请联系管理员")
     finally:
-        # 无论成功与否，最终都要解锁用户
-        USER_LOCKS[event.sender_id].release()
+        # 清理其他资源（如果有的话）
+        pass
 
 
 async def bot_handle_single_message(event: events.NewMessage.Event, message, source_chat_id, bot_client) -> None:
@@ -413,8 +417,8 @@ async def bot_handle_single_message(event: events.NewMessage.Event, message, sou
         log.exception(f"Error: {e}")
         await event.reply("服务器内部错误，请联系管理员")
     finally:
-        # 无论成功与否，最终都要解锁用户
-        USER_LOCKS[event.sender_id].release()
+        # 清理其他资源（如果有的话）
+        pass
 
 
 async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, system_overloaded=False,
@@ -476,11 +480,6 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
     if user_id not in USER_LOCKS:
         USER_LOCKS[user_id] = asyncio.Lock()
 
-    # 尝试获取锁
-    if USER_LOCKS[user_id].locked():
-        await event.reply("您有一个正在处理的转发请求，请等待完成后再发送新的请求。")
-        return
-
     # 检查用户转发次数
     free_quota, paid_quota, _ = get_user_quota(user_id)
     total_quota = free_quota + paid_quota
@@ -489,188 +488,183 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
         await event.reply("您今日的转发次数已用完！每天0点重置免费次数，或通过支付购买更多次数。")
         return
 
-    # 获取锁
-    await USER_LOCKS[user_id].acquire()
-
-    query = urllib.parse.urlparse(text).query
-    params = dict(urllib.parse.parse_qsl(query))
     try:
-        chat_id, message_id = await parse_url(text.split('?')[0])
-    except ValueError:
-        # 如果解析失败，释放锁
-        USER_LOCKS[user_id].release()
-        await event.reply("无效链接")
-        return
-    source_chat_id = chat_id
-    is_single = 'single' in text
-    is_digit = chat_id.isdigit()
+        # 使用 async with 获取锁
+        async with USER_LOCKS[user_id]:
+            # 检查锁是否已被占用
+            if USER_LOCKS[user_id].locked():
+                await event.reply("您有一个正在处理的转发请求，请等待完成后再发送新的请求。")
+                return
 
-    import requests
-    url = f"https://api.telegram.org/bot{bot_token}/getChat"
-    if is_digit:  # 私有频道和私有群组
-        peer = PeerChannel(int(chat_id))
-        is_thread = 'thread' in params
+        # 处理消息转发逻辑
+        query = urllib.parse.urlparse(text).query
+        params = dict(urllib.parse.parse_qsl(query))
         try:
-            # 获取指定聊天中的消息
-            message = await user_client.get_messages(peer, ids=message_id)
-        except ValueError as e:
-            if is_thread:
-                await event.reply("请先发送频道里任意一条消息的链接，再发送评论区消息的链接")
-            else:
-                await event.reply("私人频道/私人群组，请先发送入群邀请链接，然后再发送消息链接。")
-            # 释放锁，允许发送新请求
-            USER_LOCKS[user_id].release()
+            chat_id, message_id = await parse_url(text.split('?')[0])
+        except ValueError:
+            await event.reply("无效链接")
             return
-        except ChannelPrivateError as e:
-            await event.reply("此群组/频道无法访问，或你已被拉黑(踢了)")
-            # 释放锁，允许发送新请求
-            USER_LOCKS[user_id].release()
-            return
-        except Exception as e:
-            log.exception(f"Error: {e}")
-            await event.reply("服务器内部错误，请联系管理员")
-            # 释放锁，允许发送新请求
-            USER_LOCKS[user_id].release()
-            return
-        entity = await user_client.get_entity(peer)
-        from telethon.tl.types import Channel
-        if isinstance(entity, Channel) and not entity.megagroup:  # 频道
-            if is_single:
-                await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
-            else:
-                media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
-        else:
-            if is_thread:  # 评论消息
+        source_chat_id = chat_id
+        is_single = 'single' in text
+        is_digit = chat_id.isdigit()
+
+        import requests
+        url = f"https://api.telegram.org/bot{bot_token}/getChat"
+        if is_digit:  # 私有频道和私有群组
+            peer = PeerChannel(int(chat_id))
+            is_thread = 'thread' in params
+            try:
+                # 获取指定聊天中的消息
+                message = await user_client.get_messages(peer, ids=message_id)
+            except ValueError as e:
+                if is_thread:
+                    await event.reply("请先发送频道里任意一条消息的链接，再发送评论区消息的链接")
+                else:
+                    await event.reply("私人频道/私人群组，请先发送入群邀请链接，然后再发送消息链接。")
+                return
+            except ChannelPrivateError as e:
+                await event.reply("此群组/频道无法访问，或你已被拉黑(踢了)")
+                return
+            except Exception as e:
+                log.exception(f"Error: {e}")
+                await event.reply("服务器内部错误，请联系管理员")
+                return
+            entity = await user_client.get_entity(peer)
+            from telethon.tl.types import Channel
+            if isinstance(entity, Channel) and not entity.megagroup:  # 频道
                 if is_single:
                     await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
                 else:
                     media_group = await get_media_group_messages(message, message_id, peer, user_client)
                     await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
             else:
-                result = await replace_message(message, bot_token)
-                if result:
-                    peer, message_id = result
-                    message = await bot_client.get_messages(peer, ids=message_id)
-                    if is_single:
-                        await bot_handle_single_message(event, message, source_chat_id, bot_client)
-                    else:
-                        media_group = await get_media_group_messages(message, message_id, peer, bot_client)
-                        await bot_handle_media_group(event, message, media_group, source_chat_id, bot_client)
-                else:
+                if is_thread:  # 评论消息
                     if is_single:
                         await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
                     else:
                         media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                        await user_handle_media_group(event, message, media_group, source_chat_id, bot_client,
-                                                      user_client)
+                        await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
+                else:
+                    result = await replace_message(message, bot_token)
+                    if result:
+                        peer, message_id = result
+                        message = await bot_client.get_messages(peer, ids=message_id)
+                        if is_single:
+                            await bot_handle_single_message(event, message, source_chat_id, bot_client)
+                        else:
+                            media_group = await get_media_group_messages(message, message_id, peer, bot_client)
+                            await bot_handle_media_group(event, message, media_group, source_chat_id, bot_client)
+                    else:
+                        if is_single:
+                            await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
+                        else:
+                            media_group = await get_media_group_messages(message, message_id, peer, user_client)
+                            await user_handle_media_group(event, message, media_group, source_chat_id, bot_client,
+                                                          user_client)
 
-    else:  # 公开频道和公开群组
-        peer = chat_id
-        req_params = {"chat_id": f"@{chat_id}"}
-        
-        # 获取代理设置
-        proxy = None
-        if os.environ.get('USE_PROXY', 'False').lower() == 'true':
-            proxy_type = os.environ.get('PROXY_TYPE', 'socks5')
-            proxy_host = os.environ.get('PROXY_HOST', '127.0.0.1')
-            proxy_port = int(os.environ.get('PROXY_PORT', '10808'))
-            proxy = f"{proxy_type}://{proxy_host}:{proxy_port}"
+        else:  # 公开频道和公开群组
+            peer = chat_id
+            req_params = {"chat_id": f"@{chat_id}"}
             
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=req_params, proxy=proxy) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    if result and result.get("ok"):
-                        channel = result.get("result")
-                        has_protected_content = channel.get("has_protected_content", False)
-                        peer_type = channel.get("type")
-                else:
+            # 获取代理设置
+            proxy = None
+            if os.environ.get('USE_PROXY', 'False').lower() == 'true':
+                proxy_type = os.environ.get('PROXY_TYPE', 'socks5')
+                proxy_host = os.environ.get('PROXY_HOST', '127.0.0.1')
+                proxy_port = int(os.environ.get('PROXY_PORT', '10808'))
+                proxy = f"{proxy_type}://{proxy_host}:{proxy_port}"
+                
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=req_params, proxy=proxy) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if result and result.get("ok"):
+                            channel = result.get("result")
+                            has_protected_content = channel.get("has_protected_content", False)
+                            peer_type = channel.get("type")
+                    else:
+                        await event.reply("服务器内部错误，请联系管理员")
+                        return
+            is_channel = peer_type == "channel"
+            if is_channel:  # 公开频道
+                try:
+                    # 获取指定聊天中的消息
+                    message = await bot_client.get_messages(peer, ids=message_id)
+                except Exception as e:
+                    log.exception(f"Error: {e}")
                     await event.reply("服务器内部错误，请联系管理员")
-                    # 释放锁，允许发送新请求
-                    USER_LOCKS[user_id].release()
                     return
-        is_channel = peer_type == "channel"
-        if is_channel:  # 公开频道
-            try:
-                # 获取指定聊天中的消息
-                message = await bot_client.get_messages(peer, ids=message_id)
-            except Exception as e:
-                log.exception(f"Error: {e}")
-                await event.reply("服务器内部错误，请联系管理员")
-                # 释放锁，允许发送新请求
-                USER_LOCKS[user_id].release()
-                return
-            is_comment = 'comment' in params
-            if is_comment:
-                comment_id = int(params.get('comment'))
-                # 获取频道实体
-                channel = await user_client.get_entity(chat_id)
-                comment_message, comment_grouped_id = await get_comment_message(
-                    user_client, channel, message_id, comment_id
-                )
-                # 1、有评论-单个
-                if is_single:
-                    await user_handle_single_message(event, comment_message, source_chat_id, bot_client, user_client)
-                # 2、有评论-多个
+                is_comment = 'comment' in params
+                if is_comment:
+                    comment_id = int(params.get('comment'))
+                    # 获取频道实体
+                    channel = await user_client.get_entity(chat_id)
+                    comment_message, comment_grouped_id = await get_comment_message(
+                        user_client, channel, message_id, comment_id
+                    )
+                    # 1、有评论-单个
+                    if is_single:
+                        await user_handle_single_message(event, comment_message, source_chat_id, bot_client, user_client)
+                    # 2、有评论-多个
+                    else:
+                        # 获取属于同一组的所有消息
+                        comment_media_group = []
+                        async for reply in user_client.iter_messages(
+                                entity=channel,
+                                reply_to=message_id
+                        ):
+                            if reply.grouped_id == comment_grouped_id:
+                                comment_media_group.append(reply)
+                        # 反转列表
+                        comment_media_group.reverse()
+                        await user_handle_media_group(event, comment_message, comment_media_group, source_chat_id,
+                                                      bot_client, user_client)
                 else:
-                    # 获取属于同一组的所有消息
-                    comment_media_group = []
-                    async for reply in user_client.iter_messages(
-                            entity=channel,
-                            reply_to=message_id
-                    ):
-                        if reply.grouped_id == comment_grouped_id:
-                            comment_media_group.append(reply)
-                    # 反转列表
-                    comment_media_group.reverse()
-                    await user_handle_media_group(event, comment_message, comment_media_group, source_chat_id,
-                                                  bot_client, user_client)
-            else:
+                    if not has_protected_content:
+                        await event.reply("此消息允许转发！无需使用本机器人")
+                        return
+                    # 3、无评论-单个
+                    if is_single:
+                        await bot_handle_single_message(event, message, source_chat_id, bot_client)
+                    # 4、无评论-多个
+                    else:
+                        media_group = await get_media_group_messages(message, message_id, peer, bot_client)
+                        await bot_handle_media_group(event, message, media_group, source_chat_id, bot_client)
+            else:  # 公开群组
                 if not has_protected_content:
                     await event.reply("此消息允许转发！无需使用本机器人")
-                    # 释放锁，允许发送新请求
-                    USER_LOCKS[user_id].release()
                     return
-                # 3、无评论-单个
-                if is_single:
-                    await bot_handle_single_message(event, message, source_chat_id, bot_client)
-                # 4、无评论-多个
+                try:
+                    # 获取指定聊天中的消息
+                    message = await user_client.get_messages(peer, ids=message_id)
+                except Exception as e:
+                    log.exception(f"Error: {e}")
+                    await event.reply("服务器内部错误，请联系管理员")
+                    return
+                result = await replace_message(message, bot_token)
+                if result:
+                    peer, message_id = result
+                    message = await bot_client.get_messages(peer, ids=message_id)
+                    # await event.reply("替换频道消息，免下载转发")
+                    # 5、有替代-单个
+                    if is_single:
+                        await bot_handle_single_message(event, message, source_chat_id, bot_client)
+                    # 6、有替代-多个
+                    else:
+                        media_group = await get_media_group_messages(message, message_id, peer, bot_client)
+                        await bot_handle_media_group(event, message, media_group, source_chat_id, bot_client)
                 else:
-                    media_group = await get_media_group_messages(message, message_id, peer, bot_client)
-                    await bot_handle_media_group(event, message, media_group, source_chat_id, bot_client)
-        else:  # 公开群组
-            if not has_protected_content:
-                await event.reply("此消息允许转发！无需使用本机器人")
-                # 释放锁，允许发送新请求
-                USER_LOCKS[user_id].release()
-                return
-            try:
-                # 获取指定聊天中的消息
-                message = await user_client.get_messages(peer, ids=message_id)
-            except Exception as e:
-                log.exception(f"Error: {e}")
-                await event.reply("服务器内部错误，请联系管理员")
-                # 释放锁，允许发送新请求
-                USER_LOCKS[user_id].release()
-                return
-            result = await replace_message(message, bot_token)
-            if result:
-                peer, message_id = result
-                message = await bot_client.get_messages(peer, ids=message_id)
-                # await event.reply("替换频道消息，免下载转发")
-                # 5、有替代-单个
-                if is_single:
-                    await bot_handle_single_message(event, message, source_chat_id, bot_client)
-                # 6、有替代-多个
-                else:
-                    media_group = await get_media_group_messages(message, message_id, peer, bot_client)
-                    await bot_handle_media_group(event, message, media_group, source_chat_id, bot_client)
-            else:
-                # 7、无替代-单个
-                if is_single:
-                    await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
-                # 8、无替代-多个
-                else:
-                    media_group = await get_media_group_messages(message, message_id, peer, user_client)
-                    await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
+                    # 7、无替代-单个
+                    if is_single:
+                        await user_handle_single_message(event, message, source_chat_id, bot_client, user_client)
+                    # 8、无替代-多个
+                    else:
+                        media_group = await get_media_group_messages(message, message_id, peer, user_client)
+                        await user_handle_media_group(event, message, media_group, source_chat_id, bot_client, user_client)
+
+    except Exception as e:
+        log.exception(f"处理消息时发生错误: {e}")
+        await event.reply("服务器内部错误，请联系管理员")
+    finally:
+        # 清理其他资源（如果有的话）
+        pass
