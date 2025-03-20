@@ -20,3 +20,7 @@ db/__pycache__/orders.cpython-313.pyc
 db/__pycache__/user_quota.cpython-313.pyc
 .gitignore
 .idea/vcs.xml
+.idea/GetRestrictedMessages.iml
+.idea/misc.xml
+.idea/modules.xml
+.idea/inspectionProfiles/profiles_settings.xml

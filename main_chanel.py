@@ -6,6 +6,11 @@ from decouple import config
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
+from config import (
+    API_ID, API_HASH, SESSION, BOT_TOKEN, AUTHS, RANGE,
+    get_proxy_settings
+)
+
 # 初始化日志记录器
 logging.basicConfig(
     level=logging.INFO, format="[%(levelname)s] %(asctime)s - %(message)s"

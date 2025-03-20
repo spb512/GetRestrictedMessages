@@ -98,3 +98,10 @@ def is_authorized(event):
     # 校验 ID 或用户名是否在授权列表中
     # 由于在配置加载时已经添加了带@和不带@的格式，这里直接检查即可
     return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private
+
+
+def get_proxy_url():
+    """返回代理URL格式的配置，如果USE_PROXY为False则返回None"""
+    if USE_PROXY:
+        return f"{PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}"
+    return None
