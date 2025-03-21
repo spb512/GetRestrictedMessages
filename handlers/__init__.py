@@ -10,6 +10,5 @@ from .user_commands import (
     cmd_user,
     cmd_buy,
     cmd_check,
-    cmd_invite,
-    cmd_invite_code
+    cmd_invite
 )

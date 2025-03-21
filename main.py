@@ -23,7 +23,7 @@ from db import (
     init_db
 )
 from handlers import (
-    cmd_start, cmd_user, cmd_buy, cmd_check, cmd_invite, callback_handler, cmd_invite_code, on_new_link
+    cmd_start, cmd_user, cmd_buy, cmd_check, cmd_invite, callback_handler, on_new_link
 )
 from services import (
     schedule_transaction_checker, schedule_quota_reset, start_system_monitor
@@ -78,13 +78,6 @@ async def invite_handler(event):
     if not is_authorized(event):
         return
     await cmd_invite(event, bot_client)
-
-
-@bot_client.on(NewMessage(pattern='/invite_code'))
-async def invite_code_handler(event):
-    if not is_authorized(event):
-        return
-    await cmd_invite_code(event, bot_client)
 
 
 # 注册回调处理器
