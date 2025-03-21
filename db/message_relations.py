@@ -36,6 +36,7 @@ def save_message_relation(source_chat_id, source_message_id, target_chat_id, tar
                 conn.commit()
             else:
                 log.exception(f"保存消息关系失败: {e}")
+                conn.rollback()
 
 
 def save_media_group_relations(source_chat_id, source_messages, target_chat_id, target_messages, grouped_id=None):
@@ -48,16 +49,35 @@ def save_media_group_relations(source_chat_id, source_messages, target_chat_id, 
                     source_msg = source_messages[i]
                     target_msg = target_messages[i] if isinstance(target_messages[i], Message) else target_messages
                     created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-                    cursor.execute('''
-                    INSERT INTO message_relations 
-                    (source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id, created_at) 
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (str(source_chat_id), source_msg.id, str(target_chat_id),
-                          target_msg.id if isinstance(target_msg, Message) else target_msg,
-                          grouped_id, created_at))
+                    try:
+                        cursor.execute('''
+                        INSERT INTO message_relations 
+                        (source_chat_id, source_message_id, target_chat_id, target_message_id, grouped_id, created_at) 
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ''', (str(source_chat_id), source_msg.id, str(target_chat_id),
+                              target_msg.id if isinstance(target_msg, Message) else target_msg,
+                              grouped_id, created_at))
+                    except Exception as e:
+                        if 'UNIQUE constraint failed' in str(e):
+                            # 如果已存在，则更新
+                            created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+                            cursor.execute('''
+                            UPDATE message_relations 
+                            SET target_message_id = ?, grouped_id = ?, created_at = ?
+                            WHERE source_chat_id = ? AND source_message_id = ? AND target_chat_id = ?
+                            ''', (
+                                target_msg.id if isinstance(target_msg, Message) else target_msg, 
+                                grouped_id, 
+                                created_at, 
+                                str(source_chat_id), 
+                                source_msg.id,
+                                str(target_chat_id)))
+                        else:
+                            raise
             conn.commit()
         except Exception as e:
             log.exception(f"保存媒体组关系失败: {e}")
+            conn.rollback()
 
 
 def find_forwarded_message(source_chat_id, source_message_id, target_chat_id):
