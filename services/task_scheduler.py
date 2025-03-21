@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import aiohttp
 
-from config import TRANSACTION_CHECK_INTERVAL, ADMIN_ID, get_proxy_url
+from config import TRANSACTION_CHECK_INTERVAL, ADMIN_ID, get_proxy
 from db import (
     get_all_pending_orders, update_order_last_checked,
     cancel_expired_order, complete_order, get_order_by_id,
@@ -84,8 +84,8 @@ async def check_trc20_transaction(order_id, wallet_address, bot_client, trongrid
             "only_confirmed": "true"
         }
 
-        # 获取代理设置
-        proxy = get_proxy_url()
+        # 获取代理
+        proxy = get_proxy(format="url")
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, params=params, proxy=proxy) as response:

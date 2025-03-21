@@ -76,11 +76,20 @@ if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
 
 
 # 获取代理配置
-def get_proxy_settings():
-    """返回代理设置，如果USE_PROXY为False则返回None"""
-    if USE_PROXY:
+def get_proxy(format="tuple"):
+    """
+    返回代理设置，根据format参数返回不同格式
+    
+    :param format: 返回格式，"tuple"返回(type,host,port)元组，"url"返回"type://host:port"字符串
+    :return: 根据格式返回代理设置，如果USE_PROXY为False则返回None
+    """
+    if not USE_PROXY:
+        return None
+        
+    if format == "url":
+        return f"{PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}"
+    else:  # 默认返回tuple格式
         return PROXY_TYPE, PROXY_HOST, PROXY_PORT
-    return None
 
 
 # 验证用户是否有权使用机器人
@@ -98,10 +107,3 @@ def is_authorized(event):
     # 校验 ID 或用户名是否在授权列表中
     # 由于在配置加载时已经添加了带@和不带@的格式，这里直接检查即可
     return (sender_id in AUTH_USERS or (sender_name in AUTH_USERS if sender_name else False)) and event.is_private
-
-
-def get_proxy_url():
-    """返回代理URL格式的配置，如果USE_PROXY为False则返回None"""
-    if USE_PROXY:
-        return f"{PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}"
-    return None

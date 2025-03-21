@@ -6,6 +6,7 @@ Telethon 消息转发机器人
 import asyncio
 import logging
 from multiprocessing import Value
+import functools
 
 from telethon import TelegramClient
 from telethon.events import NewMessage, CallbackQuery
@@ -16,7 +17,7 @@ from config import (
     is_authorized,
     CPU_THRESHOLD, MEMORY_THRESHOLD, DISK_IO_THRESHOLD,
     MONITOR_INTERVAL, TRANSACTION_CHECK_INTERVAL, TRONGRID_API_KEY, USDT_CONTRACT,
-    get_proxy_settings
+    get_proxy
 )
 # 导入数据库模块
 from db import (
@@ -37,8 +38,20 @@ system_overloaded_ref = Value('b', False)  # 'b' 表示布尔值
 # 初始化数据库
 init_db()
 
+# 定义鉴权装饰器
+def requires_auth(func):
+    """
+    鉴权装饰器，用于检查用户是否有权限使用机器人
+    """
+    @functools.wraps(func)
+    async def wrapper(event, *args, **kwargs):
+        if not is_authorized(event):
+            return
+        return await func(event, *args, **kwargs)
+    return wrapper
+
 # 获取代理设置
-proxy_settings = get_proxy_settings()
+proxy_settings = get_proxy()
 
 bot_client = TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH, proxy=proxy_settings)
 user_client = TelegramClient(StringSession(USER_SESSION), API_ID, API_HASH, proxy=proxy_settings)
@@ -46,37 +59,32 @@ user_client = TelegramClient(StringSession(USER_SESSION), API_ID, API_HASH, prox
 
 # 注册命令处理器
 @bot_client.on(NewMessage(pattern='/start'))
+@requires_auth
 async def start_handler(event):
-    if not is_authorized(event):
-        return
     await cmd_start(event, bot_client)
 
 
 @bot_client.on(NewMessage(pattern='/user'))
+@requires_auth
 async def user_handler(event):
-    if not is_authorized(event):
-        return
     await cmd_user(event)
 
 
 @bot_client.on(NewMessage(pattern='/buy'))
+@requires_auth
 async def buy_handler(event):
-    if not is_authorized(event):
-        return
     await cmd_buy(event)
 
 
 @bot_client.on(NewMessage(pattern='/check'))
+@requires_auth
 async def check_handler(event):
-    if not is_authorized(event):
-        return
     await cmd_check(event)
 
 
 @bot_client.on(NewMessage(pattern='/invite'))
+@requires_auth
 async def invite_handler(event):
-    if not is_authorized(event):
-        return
     await cmd_invite(event, bot_client)
 
 
@@ -89,9 +97,8 @@ async def callback_query_handler(event):
 
 # 注册消息处理器
 @bot_client.on(NewMessage())
+@requires_auth
 async def message_handler(event):
-    if not is_authorized(event):
-        return
     # 调用链接处理函数
     await on_new_link(event, bot_client, user_client, system_overloaded=system_overloaded_ref.value,
                       bot_token=BOT_TOKEN)

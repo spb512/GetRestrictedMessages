@@ -24,7 +24,7 @@ from db import (
 log = logging.getLogger("MessageHandler")
 
 # 获取全局变量
-from config import PRIVATE_CHAT_ID, RANGE, get_proxy_url
+from config import PRIVATE_CHAT_ID, RANGE, get_proxy
 
 # 附加信息
 addInfo = "\n\n♋[91转发|机器人](https://t.me/91_zf_bot)👉：@91_zf_bot\n♍[91转发|聊天👉：](https://t.me/91_zf_bot)@91_zf_group\n🔯[91转发|通知👉：](https://t.me/91_zf_channel)@91_zf_channel"
@@ -67,7 +67,7 @@ async def replace_message(message: Message, bot_token):
         req_params = {"chat_id": peer_id}
 
         # 获取代理设置
-        proxy = get_proxy_url()
+        proxy = get_proxy(format="url")
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=req_params, proxy=proxy) as response:
@@ -566,7 +566,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                 req_params = {"chat_id": f"@{chat_id}"}
 
                 # 获取代理设置
-                proxy = get_proxy_url()
+                proxy = get_proxy(format="url")
 
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, params=req_params, proxy=proxy) as response:
