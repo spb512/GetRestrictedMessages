@@ -76,7 +76,7 @@ if not all([API_ID, API_HASH, BOT_SESSION, USER_SESSION]):
 
 
 # 获取代理配置
-def get_proxy(format="tuple"):
+def get_proxy(proxy_format="tuple"):
     """
     返回代理设置，根据format参数返回不同格式
     
@@ -86,7 +86,7 @@ def get_proxy(format="tuple"):
     if not USE_PROXY:
         return None
         
-    if format == "url":
+    if proxy_format == "url":
         return f"{PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}"
     else:  # 默认返回tuple格式
         return PROXY_TYPE, PROXY_HOST, PROXY_PORT

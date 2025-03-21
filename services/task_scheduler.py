@@ -85,7 +85,7 @@ async def check_trc20_transaction(order_id, wallet_address, bot_client, trongrid
         }
 
         # 获取代理
-        proxy = get_proxy(format="url")
+        proxy = get_proxy(proxy_format="url")
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, params=params, proxy=proxy) as response:

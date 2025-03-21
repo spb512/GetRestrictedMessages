@@ -67,7 +67,7 @@ async def replace_message(message: Message, bot_token):
         req_params = {"chat_id": peer_id}
 
         # 获取代理设置
-        proxy = get_proxy(format="url")
+        proxy = get_proxy(proxy_format="url")
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=req_params, proxy=proxy) as response:
@@ -565,7 +565,7 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
                 req_params = {"chat_id": f"@{chat_id}"}
 
                 # 获取代理设置
-                proxy = get_proxy(format="url")
+                proxy = get_proxy(proxy_format="url")
 
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, params=req_params, proxy=proxy) as response:
