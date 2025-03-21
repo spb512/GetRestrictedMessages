@@ -503,7 +503,6 @@ async def on_new_link(event: events.NewMessage.Event, bot_client, user_client, s
             is_single = 'single' in text
             is_digit = chat_id.isdigit()
 
-            import requests
             url = f"https://api.telegram.org/bot{bot_token}/getChat"
             if is_digit:  # 私有频道和私有群组
                 peer = PeerChannel(int(chat_id))
